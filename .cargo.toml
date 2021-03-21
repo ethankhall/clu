@@ -1,0 +1,14 @@
+pattern = 'v0.1.%d'
+message-template = "Created {version} for release."
+
+[cargo]
+
+[artifact.mac]
+paths = {crom = "mac/crom"}
+compress = { name = "crom-mac.tar.gz", format = "tgz" }
+target = "GitHub"
+
+[artifact.linux]
+paths = {crom = "linux/crom"}
+compress = { name = "crom-linux.tar.gz", format = "tgz" }
+target = "GitHub"

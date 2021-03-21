@@ -1,4 +1,4 @@
-# Clu
+# clu
 
 > Program designed to create the perfect world.
 
