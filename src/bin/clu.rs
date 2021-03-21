@@ -22,7 +22,7 @@ pub struct Opts {
 pub enum SubCommand {
     Init,
     RunMigration(RunMigrationArgs),
-    CheckStatus(CheckStatusArgs)
+    CheckStatus(CheckStatusArgs),
 }
 
 #[derive(Clap, Debug)]
@@ -36,23 +36,19 @@ pub struct CheckStatusArgs {
     pub github_token: String,
 }
 
-
 #[derive(Clap, Debug)]
 pub struct RunMigrationArgs {
-    /// A JSON file that contains a list of repo's to nice names.
+    /// A TOML file that defines the input needed to run a migration.
     #[clap(long)]
-    pub targets: String,
+    pub migration_defintion: String,
 
-    /// A TOML file that contains the steps required to do a migration.
-    #[clap(long)]
-    pub definition: String,
-
-    /// When a repo is migrated, it will be written into this file so other commands can use them.
+    /// The file that will contain the PR's that were created. If the migration
+    /// failed, then they WILL NOT show up in this list.
     #[clap(long)]
     pub results: String,
 
     /// Folder where the work will take place
-    #[clap(long)]
+    #[clap(long = "work-directory")]
     pub work_directory_root: String,
 
     /// Token to be used when talking to GitHub
@@ -101,11 +97,11 @@ async fn main() -> AnyResult<()> {
     let opt = Opts::parse();
     configure_logging(&opt.logging_opts);
 
-    return match opt.sub_command {
+    match opt.sub_command {
         SubCommand::Init => run_init().await,
         SubCommand::RunMigration(args) => run_migration(args).await,
         SubCommand::CheckStatus(args) => check_status(args).await,
-    };
+    }
 }
 
 async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
@@ -121,10 +117,10 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
         let status = clu::github::fetch_pull_status(&args.github_token, &pull).await?;
 
         match status {
-            PullStatus::ChecksFailed => checks_failed.push(pull.to_url()),
-            PullStatus::NeedsApproval => not_approved.push(pull.to_url()),
-            PullStatus::Mergeable=> mergeable.push(pull.to_url()),
-            PullStatus::Merged=> mergeable.push(pull.to_url()),
+            PullStatus::ChecksFailed => checks_failed.push(format!("- {}", pull.to_url())),
+            PullStatus::NeedsApproval => not_approved.push(format!("- {}", pull.to_url())),
+            PullStatus::Mergeable => mergeable.push(format!("- {}", pull.to_url())),
+            PullStatus::Merged => mergeable.push(format!("- {}", pull.to_url())),
         }
     }
 
@@ -133,51 +129,64 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
     mergeable.sort();
     merged.sort();
 
-    println!("# Migration Results
+    println!(
+        "# Migration Results
 ## Checks Failed
+
 {}
 
 ## Not Approved
+
 {}
 
 ## Mergeable
+
 {}
 
 ## Merged
-{}", checks_failed.join("\n"), not_approved.join("\n"), mergeable.join("\n"), merged.join("\n"));
+
+{}",
+        checks_failed.join("\n"),
+        not_approved.join("\n"),
+        mergeable.join("\n"),
+        merged.join("\n")
+    );
 
     Ok(())
 }
 
 async fn run_init() -> AnyResult<()> {
-    let target_config = MigrationTargetsConfig::new(vec![MigrationTarget::new(
-        "dummy-repo",
-        "git@github.com:ethankhall/dummy-repo.git",
-    )]);
+    use std::collections::BTreeMap;
+    let mut targets = BTreeMap::new();
+    targets.insert(
+        "dummy-repo".to_owned(),
+        "git@github.com:ethankhall/dummy-repo.git".to_owned(),
+    );
+
     let definition = MigrationDefinition {
-        checkout: RepoCheckout { 
+        checkout: RepoCheckout {
             branch_name: "ethankhall/foo-example".to_owned(),
             pre_flight: "/usr/bin/true".to_owned(),
         },
         pr: PrCreationDetails {
             title: "Example Title".to_owned(),
-            description: "/usr/bin/env cat --help".to_owned(),
+            description: "This is a TOML file\n\nSo you can add newlines between the PR's"
+                .to_owned(),
         },
         steps: vec![MigrationStep {
             name: "Example".to_owned(),
             migration_script: "examples/example-migration.sh".to_owned(),
-        }]
+        }],
     };
 
-    let target_config = serde_json::to_string_pretty(&target_config)?;
+    let migration_input = MigrationInput {
+        targets,
+        definition,
+    };
 
-    let mut f = File::create("migration-targets.json")?;
-    f.write_all(target_config.as_bytes())
-        .expect("Unable to write data");
+    let definition = toml::to_string_pretty(&migration_input)?;
 
-    let definition = toml::to_string_pretty(&definition)?;
-
-    let mut f = File::create("migration-definition.toml")?;
+    let mut f = File::create("migration.toml")?;
     f.write_all(definition.as_bytes())
         .expect("Unable to write data");
 
@@ -185,42 +194,56 @@ async fn run_init() -> AnyResult<()> {
 }
 
 pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
-    let targets: MigrationTargetsConfig = serde_json::from_str(&read_to_string(&args.targets)?)?;
-    let definition: MigrationDefinition = toml::from_str(&read_to_string(&args.definition)?)?;
+    let migration_input: MigrationInput =
+        toml::from_str(&read_to_string(&args.migration_defintion)?)?;
 
-    debug!("targets: {:?}", &targets);
-    debug!("definition: {:?}", &definition);
+    debug!("targets: {:?}", &migration_input.targets);
+    debug!("definition: {:?}", &migration_input);
 
-    info!("Processing {} repos", &targets.targets.len());
+    info!("Processing {} repos", &migration_input.targets.len());
 
     create_dir_all(&args.work_directory_root)?;
     let work_directory_root = args.work_directory_root;
     let mut created_pull_requests = Vec::new();
+    let mut failed_migrations = Vec::new();
 
-    for target in targets.targets {
-        debug!("Processing {:?}", target);
-        let target_dir = PathBuf::from(&work_directory_root).join(&target.pretty_name);
+    for (pretty_name, repo) in migration_input.targets {
+        debug!("Processing {:?}", &pretty_name);
+        let target_dir = PathBuf::from(&work_directory_root).join(&pretty_name);
         if target_dir.exists() {
             remove_dir_all(&target_dir)?;
         }
         create_dir_all(&target_dir)?;
 
-        let input = MigrationInput {
-            target: target.clone(),
-            definition: definition.clone(),
+        let input = MigrationTask {
+            pretty_name: pretty_name.clone(),
+            repo,
+            definition: migration_input.definition.clone(),
             work_dir: target_dir.clone(),
             github_token: args.github_token.clone(),
         };
 
-        match clu::migration::run_migration(input).await {
+        match clu::migration::run_migration(&input).await {
             Ok(pull) => created_pull_requests.push(pull),
-            Err(e) => warn!("There was a problem migration {}. Err: {:?}", target.pretty_name, e)
+            Err(e) => {
+                warn!(
+                    "There was a problem migration {}. Err: {:?}",
+                    &pretty_name, e
+                );
+                failed_migrations.push(pretty_name)
+            }
         };
     }
 
-    let created_prs = toml::to_string_pretty(&CreatedPullRequests { pulls: created_pull_requests})?;
+    let created_prs = toml::to_string_pretty(&CreatedPullRequests {
+        pulls: created_pull_requests,
+    })?;
     let mut results = File::create(args.results)?;
     results.write_all(created_prs.as_bytes())?;
+
+    if !failed_migrations.is_empty() {
+        info!("Failed Migrations: {}", failed_migrations.join(", "));
+    }
 
     Ok(())
 }

@@ -1,11 +1,11 @@
+use crate::models::PullRequest;
 use anyhow::{bail, Result as AnyResult};
 use hubcaps::pulls::PullOptions;
 use hubcaps::{Credentials, Github};
 use regex::Regex;
+use std::fmt;
 use thiserror::Error;
 use tracing::{debug, info};
-use std::fmt;
-use crate::models::PullRequest;
 
 pub struct CreatePullRequest<'a> {
     pub repo: &'a GitHubRepo,
@@ -35,13 +35,13 @@ pub enum PullStatus {
     ChecksFailed,
     NeedsApproval,
     Mergeable,
-    Merged
+    Merged,
 }
 
 pub async fn fetch_pull_status(github_token: &str, pull: &PullRequest) -> AnyResult<PullStatus> {
     let github = Github::new(
         format!("clu/{}", env!("CARGO_PKG_VERSION")),
-        Credentials::Token(format!("{}", &github_token)),
+        Credentials::Token(github_token.to_owned()),
     )?;
 
     let repo = github.repo(pull.owner.clone(), pull.repo.clone());
@@ -55,7 +55,9 @@ pub async fn fetch_pull_status(github_token: &str, pull: &PullRequest) -> AnyRes
         return Ok(PullStatus::Merged);
     }
 
-    let checks_pass = statuses.iter().all(|x| x.state ==  hubcaps::statuses::State::Success);
+    let checks_pass = statuses
+        .iter()
+        .all(|x| x.state == hubcaps::statuses::State::Success);
     if checks_pass {
         return Ok(PullStatus::ChecksFailed);
     }
@@ -90,7 +92,7 @@ pub async fn create_pull_request(
 ) -> AnyResult<u64> {
     let github = Github::new(
         format!("clu/{}", env!("CARGO_PKG_VERSION")),
-        Credentials::Token(format!("{}", &github_token)),
+        Credentials::Token(github_token.to_owned()),
     )?;
 
     let repo = github.repo(create_pr.repo.owner.clone(), create_pr.repo.repo.clone());

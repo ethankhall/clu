@@ -37,7 +37,7 @@ impl Workspace {
 
     pub async fn run_command(&mut self, args: &str) -> AnyResult<Output> {
         debug!("Running {}", args);
-        
+
         let notification = format!(">> Running {}\n", args);
         self.stdout.write_all(notification.as_bytes())?;
         self.stderr.write_all(notification.as_bytes())?;

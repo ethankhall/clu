@@ -1,42 +1,19 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct MigrationTargetsConfig {
-    pub targets: Vec<MigrationTarget>,
-}
-
-impl MigrationTargetsConfig {
-    pub fn new(targets: Vec<MigrationTarget>) -> Self {
-        Self { targets }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct MigrationTarget {
-    pub pretty_name: String,
-    pub repo_path: String,
-}
-
-impl MigrationTarget {
-    pub fn new(pretty_name: &str, repo_path: &str) -> Self {
-        Self {
-            pretty_name: pretty_name.to_owned(),
-            repo_path: repo_path.to_owned(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub struct MigrationDefinition {
     pub checkout: RepoCheckout,
 
     pub pr: PrCreationDetails,
 
-    pub steps: Vec<MigrationStep>
+    pub steps: Vec<MigrationStep>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub struct RepoCheckout {
     /// The name of the branch that should be pushed up to GitHub. This should be
     /// something semi unique, and would recommend to include the name of the migration
@@ -50,6 +27,7 @@ pub struct RepoCheckout {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub struct MigrationStep {
     /// Name of the migration step, only used for reporting.
     pub name: String,
@@ -64,17 +42,26 @@ pub struct MigrationStep {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub struct PrCreationDetails {
-       /// The titile of the PR.
-       pub title: String, 
+    /// The titile of the PR.
+    pub title: String,
 
-       /// This message will also show up in the GitHub PR.
-       pub description: String,
+    /// This message will also show up in the GitHub PR.
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MigrationInput {
+    pub targets: BTreeMap<String, String>,
+    #[serde(flatten)]
+    pub definition: MigrationDefinition,
 }
 
 #[derive(Debug, Clone)]
-pub struct MigrationInput {
-    pub target: MigrationTarget,
+pub struct MigrationTask {
+    pub pretty_name: String,
+    pub repo: String,
     pub definition: MigrationDefinition,
     pub work_dir: PathBuf,
     pub github_token: String,
@@ -89,11 +76,14 @@ pub struct PullRequest {
 
 impl PullRequest {
     pub fn to_url(&self) -> String {
-        format!("https://github.com/{}/{}/pull/{}", self.owner, self.repo, self.pr_number)
+        format!(
+            "https://github.com/{}/{}/pull/{}",
+            self.owner, self.repo, self.pr_number
+        )
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CreatedPullRequests {
-    pub pulls: Vec<PullRequest>
+    pub pulls: Vec<PullRequest>,
 }

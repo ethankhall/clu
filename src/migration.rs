@@ -1,12 +1,12 @@
 use anyhow::{bail, Result as AnyResult};
 use git2::Repository;
+use std::env::current_dir;
+use std::path::PathBuf;
 use thiserror::Error;
 use tracing::{info, instrument};
-use std::path::{PathBuf};
-use std::env::current_dir;
 
-use crate::github::{create_pull_request, GitHubRepo, CreatePullRequest};
-use crate::models::{MigrationInput, PullRequest};
+use crate::github::{create_pull_request, CreatePullRequest, GitHubRepo};
+use crate::models::{MigrationTask, PullRequest};
 use crate::workspace::Workspace;
 
 #[derive(Error, Debug)]
@@ -17,47 +17,47 @@ pub enum MigrationError {
     CommandError(#[from] crate::workspace::CommandError),
 }
 
-#[instrument(name = "migrate", skip(migration_input), fields(name = %migration_input.target.pretty_name))]
-pub async fn run_migration(migration_input: MigrationInput) -> AnyResult<PullRequest> {
-    let target = &migration_input.target;
-    let work_dir = migration_input.work_dir.canonicalize()?;
+#[instrument(name = "migrate", skip(task), fields(name = %task.pretty_name))]
+pub async fn run_migration(task: &MigrationTask) -> AnyResult<PullRequest> {
+    let work_dir = task.work_dir.canonicalize()?;
 
-    info!("Processing {} in {:?}", target.pretty_name, work_dir);
-    let github_repo = crate::github::extract_github_info(&migration_input.target.repo_path)?;
+    info!("Processing {} in {:?}", task.pretty_name, work_dir);
+    let github_repo = crate::github::extract_github_info(&task.repo)?;
 
     let mut workspace = Workspace::new(&work_dir)?;
 
-    checkout_repo(&migration_input, &mut workspace).await?;
-    run_preflight_check(&migration_input, &mut workspace).await?;
-    run_migration_script(&migration_input, &mut workspace).await?;
-    prepair_pr(&github_repo, &migration_input).await
+    checkout_repo(&task, &mut workspace).await?;
+    run_preflight_check(&task, &mut workspace).await?;
+    run_migration_script(&task, &mut workspace).await?;
+    prepair_pr(&github_repo, &task).await
 }
 
-async fn prepair_pr(github_repo: &GitHubRepo, migration_input: &MigrationInput) -> AnyResult<PullRequest> {
-    let definition = &migration_input.definition;
+async fn prepair_pr(github_repo: &GitHubRepo, task: &MigrationTask) -> AnyResult<PullRequest> {
+    let definition = &task.definition;
 
     let pr_number = create_pull_request(
-        &migration_input.github_token,
+        &task.github_token,
         CreatePullRequest {
             repo: &github_repo,
             branch: &definition.checkout.branch_name,
             title: &definition.pr.title,
             body: &definition.pr.description,
         },
-    ).await?;
+    )
+    .await?;
 
-    Ok(PullRequest { owner: github_repo.owner.clone(), repo: github_repo.repo.clone(), pr_number })
+    Ok(PullRequest {
+        owner: github_repo.owner.clone(),
+        repo: github_repo.repo.clone(),
+        pr_number,
+    })
 }
 
-async fn run_migration_script(
-    migration_input: &MigrationInput,
-    workspace: &mut Workspace,
-) -> AnyResult<()> {
-    let target = &migration_input.target;
-    let definition = &migration_input.definition;
+async fn run_migration_script(task: &MigrationTask, workspace: &mut Workspace) -> AnyResult<()> {
+    let definition = &task.definition;
 
     for step in &definition.steps {
-        info!("Running {} for {}", step.name, target.pretty_name);
+        info!("Running {} for {}", step.name, task.pretty_name);
         workspace
             .run_command_successfully(&make_script_absolute(&step.migration_script)?)
             .await?;
@@ -81,13 +81,9 @@ async fn run_migration_script(
     workspace.run_command_successfully(&"git push").await
 }
 
-async fn run_preflight_check(
-    migration_input: &MigrationInput,
-    workspace: &mut Workspace,
-) -> AnyResult<()> {
-    let target = &migration_input.target;
-    let definition = &migration_input.definition;
-    info!("Running pre-flight check for {}", target.pretty_name);
+async fn run_preflight_check(task: &MigrationTask, workspace: &mut Workspace) -> AnyResult<()> {
+    let definition = &task.definition;
+    info!("Running pre-flight check for {}", task.pretty_name);
     workspace
         .run_command_successfully(&make_script_absolute(&definition.checkout.pre_flight)?)
         .await?;
@@ -106,30 +102,29 @@ fn make_script_absolute(path: &str) -> AnyResult<String> {
     Ok(preflight_check.to_owned())
 }
 
-async fn checkout_repo(
-    migration_input: &MigrationInput,
-    workspace: &mut Workspace,
-) -> AnyResult<()> {
+async fn checkout_repo(task: &MigrationTask, workspace: &mut Workspace) -> AnyResult<()> {
     let git_repo = workspace.root_dir.join("repo");
-    let target = &migration_input.target;
-    let definition = &migration_input.definition;
+    let definition = &task.definition;
 
     info!(
         "Cloning {} into {}",
-        target.pretty_name,
+        task.pretty_name,
         git_repo.to_str().unwrap()
     );
 
     workspace
         .run_command_successfully(&format!(
             "git clone {} {}",
-            &target.repo_path,
+            &task.repo,
             git_repo.to_str().unwrap()
         ))
         .await?;
     workspace.set_working_dir("repo");
     workspace
-        .run_command_successfully(&format!("git checkout -b {}", &definition.checkout.branch_name))
+        .run_command_successfully(&format!(
+            "git checkout -b {}",
+            &definition.checkout.branch_name
+        ))
         .await?;
 
     Ok(())
