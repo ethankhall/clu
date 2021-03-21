@@ -1,0 +1,23 @@
+[package]
+name = "clu"
+version = "0.1.0"
+authors = ["Ethan Hall <ethan@hall.sh>"]
+edition = "2018"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = "0.2"
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1.42"
+clap = { version = "3.0.0-beta.2" }
+dotenv = "*"
+thiserror = "1.0"
+anyhow = "1.0"
+git2 = "0.13.17"
+async-process = "1.0"
+# Upgrade to Tokio
+hubcaps = { git = "https://github.com/softprops/hubcaps", rev = "a9e6616ecc7b8eef0ea0eaf6055d9610c8961500" }
+regex = "1.4"
+toml = "0.5"
