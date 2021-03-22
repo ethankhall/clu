@@ -1,5 +1,5 @@
 use crate::models::PullRequest;
-use anyhow::{bail, Result as AnyResult};
+use anyhow::Result as AnyResult;
 use hubcaps::pulls::PullOptions;
 use hubcaps::{Credentials, Github};
 use regex::Regex;
@@ -29,6 +29,8 @@ impl fmt::Display for GitHubRepo {
 pub enum GitHubError {
     #[error("Unable to determine GitHub owner/repo from {path}")]
     UnableToDetermineRepo { path: String },
+    #[error(transparent)]
+    HubcapError(#[from] hubcaps::Error),
 }
 
 pub enum PullStatus {
@@ -69,9 +71,10 @@ pub async fn fetch_pull_status(github_token: &str, pull: &PullRequest) -> AnyRes
     }
 }
 
-pub fn extract_github_info(url: &str) -> AnyResult<GitHubRepo> {
+pub fn extract_github_info(url: &str) -> Result<GitHubRepo, GitHubError> {
     let re =
-        Regex::new("^(https://github.com/|git@github.com:)(?P<owner>.+?)/(?P<repo>.+?)(\\.git)?$")?;
+        Regex::new("^(https://github.com/|git@github.com:)(?P<owner>.+?)/(?P<repo>.+?)(\\.git)?$")
+            .unwrap();
 
     match re.captures(url) {
         Some(matches) => {
@@ -80,8 +83,8 @@ pub fn extract_github_info(url: &str) -> AnyResult<GitHubRepo> {
 
             Ok(GitHubRepo { owner, repo })
         }
-        None => bail!(GitHubError::UnableToDetermineRepo {
-            path: url.to_owned()
+        None => Err(GitHubError::UnableToDetermineRepo {
+            path: url.to_owned(),
         }),
     }
 }
@@ -89,7 +92,7 @@ pub fn extract_github_info(url: &str) -> AnyResult<GitHubRepo> {
 pub async fn create_pull_request(
     github_token: &str,
     create_pr: CreatePullRequest<'_>,
-) -> AnyResult<u64> {
+) -> Result<u64, GitHubError> {
     let github = Github::new(
         format!("clu/{}", env!("CARGO_PKG_VERSION")),
         Credentials::Token(github_token.to_owned()),

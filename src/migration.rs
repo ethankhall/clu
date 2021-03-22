@@ -13,27 +13,74 @@ use crate::workspace::Workspace;
 pub enum MigrationError {
     #[error("The working directory has uncommitted changes. Files: {files}")]
     WorkingDirNotClean { files: String },
+    #[error("Unable to checkout {repo}. Got error: {source:?}")]
+    UnableToCheckoutRepo {
+        repo: String,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("Pre-flight check failed.")]
+    PreFlightCheckFailed,
+    #[error("Migration ran unsuccessfully.")]
+    MigrationFailed {
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("Unable to creat pull request.")]
+    UnableToCreatePullRequest {
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("Unable to parse Git Repo.")]
+    InvalidGitRepo {
+        #[source]
+        source: crate::github::GitHubError,
+    },
     #[error(transparent)]
-    CommandError(#[from] crate::workspace::CommandError),
+    IoError(#[from] std::io::Error),
 }
 
 #[instrument(name = "migrate", skip(task), fields(name = %task.pretty_name))]
-pub async fn run_migration(task: &MigrationTask) -> AnyResult<PullRequest> {
+pub async fn run_migration(task: &MigrationTask) -> Result<PullRequest, MigrationError> {
     let work_dir = task.work_dir.canonicalize()?;
 
     info!("Processing {} in {:?}", task.pretty_name, work_dir);
-    let github_repo = crate::github::extract_github_info(&task.repo)?;
+    let github_repo = match crate::github::extract_github_info(&task.repo) {
+        Ok(repo) => repo,
+        Err(e) => return Err(MigrationError::InvalidGitRepo { source: e }),
+    };
 
     let mut workspace = Workspace::new(&work_dir)?;
 
-    checkout_repo(&task, &mut workspace).await?;
-    run_preflight_check(&task, &mut workspace).await?;
-    run_migration_script(&task, &mut workspace).await?;
-    prepair_pr(&github_repo, &task).await
+    if let Err(e) = checkout_repo(&task, &mut workspace).await {
+        return Err(MigrationError::UnableToCheckoutRepo {
+            repo: task.repo.clone(),
+            source: e,
+        });
+    };
+
+    if run_preflight_check(&task, &mut workspace).await.is_err() {
+        return Err(MigrationError::PreFlightCheckFailed);
+    };
+
+    if let Err(e) = run_migration_script(&task, &mut workspace).await {
+        return Err(MigrationError::MigrationFailed { source: e });
+    }
+
+    match prepair_pr(&github_repo, &task, &mut workspace).await {
+        Err(e) => Err(MigrationError::UnableToCreatePullRequest { source: e }),
+        Ok(pr) => Ok(pr),
+    }
 }
 
-async fn prepair_pr(github_repo: &GitHubRepo, task: &MigrationTask) -> AnyResult<PullRequest> {
+async fn prepair_pr(
+    github_repo: &GitHubRepo,
+    task: &MigrationTask,
+    workspace: &mut Workspace,
+) -> AnyResult<PullRequest> {
     let definition = &task.definition;
+
+    workspace.run_command_successfully(&"git push").await?;
 
     let pr_number = create_pull_request(
         &task.github_token,
@@ -78,7 +125,7 @@ async fn run_migration_script(task: &MigrationTask, workspace: &mut Workspace) -
         })
     }
 
-    workspace.run_command_successfully(&"git push").await
+    Ok(())
 }
 
 async fn run_preflight_check(task: &MigrationTask, workspace: &mut Workspace) -> AnyResult<()> {

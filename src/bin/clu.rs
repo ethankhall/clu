@@ -230,7 +230,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
                     "There was a problem migration {}. Err: {:?}",
                     &pretty_name, e
                 );
-                failed_migrations.push(pretty_name)
+                failed_migrations.push(format!("{} - {:?}", pretty_name, e))
             }
         };
     }
