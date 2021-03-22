@@ -65,7 +65,7 @@ jobs:
         uses: actions/upload-artifact@v1
         with:
           name: mac-artifacts
-          path: target/release/crom
+          path: target/release/clu
 
   release:
     runs-on: ubuntu-latest

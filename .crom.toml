@@ -4,11 +4,11 @@ message-template = "Created {version} for release."
 [cargo]
 
 [artifact.mac]
-paths = {crom = "mac/crom"}
-compress = { name = "crom-mac.tar.gz", format = "tgz" }
+paths = {clu = "mac/clu"}
+compress = { name = "clu-mac.tar.gz", format = "tgz" }
 target = "GitHub"
 
 [artifact.linux]
-paths = {crom = "linux/crom"}
-compress = { name = "crom-linux.tar.gz", format = "tgz" }
+paths = {clu = "linux/clu"}
+compress = { name = "clu-linux.tar.gz", format = "tgz" }
 target = "GitHub"
