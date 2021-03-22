@@ -54,7 +54,7 @@ jobs:
       - name: do-build
         run: |
           mkdir ~/bin
-          curl --location https://github.com/ethankhall/crom/releases/download/v0.1.14/crom-mac.tar.gz | tar -xvz  -C ~/bin
+          curl --location https://github.com/ethankhall/crom/releases/download/v0.3.3/crom-mac.tar.gz | tar -xvz  -C ~/bin
           chmod +x ~/bin/crom
           ~/bin/crom write-version latest
       - uses: actions-rs/cargo@v1
