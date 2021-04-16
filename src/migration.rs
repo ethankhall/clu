@@ -1,4 +1,4 @@
-use anyhow::{bail, Result as AnyResult};
+use anyhow::{Result as AnyResult};
 use git2::Repository;
 use std::env::current_dir;
 use std::path::PathBuf;
@@ -6,23 +6,14 @@ use thiserror::Error;
 use tracing::{info, instrument};
 
 use crate::github::{create_pull_request, CreatePullRequest, GitHubRepo};
-use crate::models::{MigrationTask, PullRequest};
+use crate::models::{MigrationStatus, MigrationTask, PullRequest};
 use crate::workspace::Workspace;
 
 #[derive(Error, Debug)]
 pub enum MigrationError {
-    #[error("The working directory has uncommitted changes. Files: {files}")]
-    WorkingDirNotClean { files: String },
     #[error("Unable to checkout {repo}. Got error: {source:?}")]
     UnableToCheckoutRepo {
         repo: String,
-        #[source]
-        source: anyhow::Error,
-    },
-    #[error("Pre-flight check failed.")]
-    PreFlightCheckFailed,
-    #[error("Migration ran unsuccessfully.")]
-    MigrationFailed {
         #[source]
         source: anyhow::Error,
     },
@@ -38,10 +29,41 @@ pub enum MigrationError {
     },
     #[error(transparent)]
     IoError(#[from] std::io::Error),
+    #[error(transparent)]
+    AnyHowError(#[from] anyhow::Error),
+}
+
+pub enum ExpectedResults {
+    DryRun,
+    PreFlightCheckFailed,
+    WorkingDirNotClean { files: String },
+    MigrationFailed { step: String },
+    PullRequest(PullRequest),
+}
+
+impl Into<MigrationStatus> for ExpectedResults {
+    fn into(self) -> MigrationStatus {
+        match self {
+            ExpectedResults::DryRun => MigrationStatus::PullRequestSkipped,
+            ExpectedResults::PreFlightCheckFailed => MigrationStatus::PreFlightFailed,
+            ExpectedResults::WorkingDirNotClean { files } => {
+                MigrationStatus::WorkingDirNotClean { files }
+            }
+            ExpectedResults::MigrationFailed { step } => {
+                MigrationStatus::MigrationStepFailed { step_name: step }
+            }
+            ExpectedResults::PullRequest(pr) => MigrationStatus::PullRequestCreated(pr),
+        }
+    }
+}
+
+enum ThisResult {
+    Ok,
+    ExpectedError(ExpectedResults),
 }
 
 #[instrument(name = "migrate", skip(task), fields(name = %task.pretty_name))]
-pub async fn run_migration(task: &MigrationTask) -> Result<PullRequest, MigrationError> {
+pub async fn run_migration(task: &MigrationTask) -> Result<ExpectedResults, MigrationError> {
     let work_dir = task.work_dir.canonicalize()?;
 
     info!("Processing {} in {:?}", task.pretty_name, work_dir);
@@ -60,16 +82,21 @@ pub async fn run_migration(task: &MigrationTask) -> Result<PullRequest, Migratio
     };
 
     if run_preflight_check(&task, &mut workspace).await.is_err() {
-        return Err(MigrationError::PreFlightCheckFailed);
+        return Ok(ExpectedResults::PreFlightCheckFailed);
     };
 
-    if let Err(e) = run_migration_script(&task, &mut workspace).await {
-        return Err(MigrationError::MigrationFailed { source: e });
+    match run_migration_script(&task, &mut workspace).await? {
+        ThisResult::Ok => {}
+        ThisResult::ExpectedError(r) => return Ok(r),
     }
 
-    match prepair_pr(&github_repo, &task, &mut workspace).await {
-        Err(e) => Err(MigrationError::UnableToCreatePullRequest { source: e }),
-        Ok(pr) => Ok(pr),
+    if !task.dry_run {
+        match prepair_pr(&github_repo, &task, &mut workspace).await {
+            Err(e) => Err(MigrationError::UnableToCreatePullRequest { source: e }),
+            Ok(pr) => Ok(ExpectedResults::PullRequest(pr)),
+        }
+    } else {
+        Ok(ExpectedResults::DryRun)
     }
 }
 
@@ -100,14 +127,24 @@ async fn prepair_pr(
     })
 }
 
-async fn run_migration_script(task: &MigrationTask, workspace: &mut Workspace) -> AnyResult<()> {
+async fn run_migration_script(
+    task: &MigrationTask,
+    workspace: &mut Workspace,
+) -> AnyResult<ThisResult> {
     let definition = &task.definition;
 
     for step in &definition.steps {
         info!("Running {} for {}", step.name, task.pretty_name);
-        workspace
+        if let Err(_) = workspace
             .run_command_successfully(&make_script_absolute(&step.migration_script)?)
-            .await?;
+            .await
+        {
+            return Ok(ThisResult::ExpectedError(
+                ExpectedResults::MigrationFailed {
+                    step: step.name.to_string(),
+                },
+            ));
+        }
         info!("Migration script finished successfully");
     }
 
@@ -120,12 +157,15 @@ async fn run_migration_script(task: &MigrationTask, workspace: &mut Workspace) -
             .iter()
             .map(|x| x.path().unwrap().to_owned())
             .collect();
-        bail!(MigrationError::WorkingDirNotClean {
-            files: files.join(", ")
-        })
+
+        return Ok(ThisResult::ExpectedError(
+            ExpectedResults::WorkingDirNotClean {
+                files: files.join(", "),
+            },
+        ));
     }
 
-    Ok(())
+    Ok(ThisResult::Ok)
 }
 
 async fn run_preflight_check(task: &MigrationTask, workspace: &mut Workspace) -> AnyResult<()> {

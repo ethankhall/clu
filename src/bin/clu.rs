@@ -2,6 +2,7 @@ use clap::{ArgGroup, Clap};
 use std::fs::{create_dir_all, read_to_string, remove_dir_all, File};
 use std::io::Write;
 use std::path::PathBuf;
+use futures::stream::{self, StreamExt};
 
 use anyhow::Result as AnyResult;
 use tracing::{debug, info, warn};
@@ -20,8 +21,11 @@ pub struct Opts {
 
 #[derive(Clap, Debug)]
 pub enum SubCommand {
+    /// Build a default migration toml file
     Init,
+    /// Run a migration, and write the results back to the file
     RunMigration(RunMigrationArgs),
+    /// Check the status of a migration
     CheckStatus(CheckStatusArgs),
 }
 
@@ -38,14 +42,15 @@ pub struct CheckStatusArgs {
 
 #[derive(Clap, Debug)]
 pub struct RunMigrationArgs {
-    /// A TOML file that defines the input needed to run a migration.
+    /// A TOML file that defines the input needed to run a migration. This file will be updated
+    /// with the results of the run.
     #[clap(long)]
     pub migration_defintion: String,
 
-    /// The file that will contain the PR's that were created. If the migration
-    /// failed, then they WILL NOT show up in this list.
+    /// This file is the updated contents of the migration_defintion with
+    /// results.
     #[clap(long)]
-    pub results: String,
+    pub results_file: String,
 
     /// Folder where the work will take place
     #[clap(long = "work-directory")]
@@ -54,6 +59,10 @@ pub struct RunMigrationArgs {
     /// Token to be used when talking to GitHub
     #[clap(long, env = "GITHUB_TOKEN")]
     pub github_token: String,
+
+    /// When set, the PR will not be created
+    #[clap(long)]
+    pub skip_pull_request: bool,
 }
 
 #[derive(Clap, Debug)]
@@ -112,8 +121,13 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
     let mut mergeable: Vec<String> = Vec::new();
     let mut merged: Vec<String> = Vec::new();
 
-    let results: CreatedPullRequests = toml::from_str(&read_to_string(args.results)?)?;
-    for pull in results.pulls {
+    let results: MigrationInput = toml::from_str(&read_to_string(args.results)?)?;
+    for (_name, target) in results.targets {
+        let pull = match target.migration_status {
+            Some(MigrationStatus::PullRequestCreated(pull)) => pull,
+            _ => continue
+        };
+
         let status = clu::github::fetch_pull_status(&args.github_token, &pull).await?;
 
         match status {
@@ -160,7 +174,7 @@ async fn run_init() -> AnyResult<()> {
     let mut targets = BTreeMap::new();
     targets.insert(
         "dummy-repo".to_owned(),
-        "git@github.com:ethankhall/dummy-repo.git".to_owned(),
+        TargetDescription::new("git@github.com:ethankhall/dummy-repo.git"),
     );
 
     let definition = MigrationDefinition {
@@ -194,7 +208,10 @@ async fn run_init() -> AnyResult<()> {
 }
 
 pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
-    let migration_input: MigrationInput =
+    use std::sync::{Arc, Mutex};
+    use std::collections::BTreeMap;
+
+    let mut migration_input: MigrationInput =
         toml::from_str(&read_to_string(&args.migration_defintion)?)?;
 
     debug!("targets: {:?}", &migration_input.targets);
@@ -204,48 +221,77 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
 
     create_dir_all(&args.work_directory_root)?;
     let work_directory_root = args.work_directory_root;
-    let mut created_pull_requests = Vec::new();
-    let mut failed_migrations = Vec::new();
 
-    for (pretty_name, repo) in migration_input.targets {
-        debug!("Processing {:?}", &pretty_name);
-        let target_dir = PathBuf::from(&work_directory_root).join(&pretty_name);
-        if target_dir.exists() {
-            remove_dir_all(&target_dir)?;
-        }
-        create_dir_all(&target_dir)?;
+    let result_map = Arc::new(Mutex::new(BTreeMap::default()));
 
-        let input = MigrationTask {
-            pretty_name: pretty_name.clone(),
-            repo,
-            definition: migration_input.definition.clone(),
-            work_dir: target_dir.clone(),
-            github_token: args.github_token.clone(),
-        };
-
-        match clu::migration::run_migration(&input).await {
-            Ok(pull) => created_pull_requests.push(pull),
-            Err(e) => {
-                warn!(
-                    "There was a problem migration {}. Err: {:?}",
-                    &pretty_name, e
-                );
-                failed_migrations.push(format!("{} - {:?}", pretty_name, e))
-            }
-        };
+    let mut tasks = Vec::new();
+    for (pretty_name, target) in &migration_input.targets {   
+        tasks.push((result_map.clone(),prepair_migration(&migration_input.definition, &args.github_token, args.skip_pull_request, &work_directory_root, &pretty_name, &target).await?));
     }
 
-    let created_prs = toml::to_string_pretty(&CreatedPullRequests {
-        pulls: created_pull_requests,
-    })?;
-    let mut results = File::create(args.results)?;
-    results.write_all(created_prs.as_bytes())?;
+    stream::iter(tasks).for_each_concurrent(3, |(result_map, task)| async move {
+        let status = match run_single_migration(&task).await {
+            Err(e) => MigrationStatus::Other { message: e.to_string() },
+            Ok(status) => status
+        };
+        let mut result_map = result_map.lock().unwrap();
+        result_map.insert(task.pretty_name, status);
+    }).await;
 
-    if !failed_migrations.is_empty() {
-        info!("Failed Migrations: {}", failed_migrations.join(", "));
+    let result_map = result_map.lock().unwrap();
+    for (pretty_name, status) in result_map.iter() {
+        let status = status.clone();
+        migration_input.targets.get_mut(pretty_name).unwrap().migration_status = Some(status);
     }
+
+    let updated_migration_input = &toml::to_string_pretty(&migration_input)?;
+    let mut results = File::create(args.results_file)?;
+    results.write_all(updated_migration_input.as_bytes())?;
 
     Ok(())
+}
+
+
+async fn prepair_migration(definition: &MigrationDefinition, github_token: &str, skip_pull_request: bool, work_directory_root: &str, pretty_name: &str, target: &TargetDescription) -> anyhow::Result<MigrationTask> {
+    debug!("Processing {:?}", &pretty_name);
+    let target_dir = PathBuf::from(&work_directory_root).join(&pretty_name);
+
+    let env = match &target.env {
+        Some(value) => value.clone(),
+        None => std::collections::BTreeMap::default(),
+    };
+
+    Ok(MigrationTask {
+        pretty_name: pretty_name.to_owned(),
+        repo: target.repo.clone(),
+        definition: definition.clone(),
+        work_dir: target_dir.clone(),
+        env,
+        github_token: github_token.to_owned(),
+        dry_run: skip_pull_request,
+    })
+}
+
+async fn run_single_migration(input: &MigrationTask) -> anyhow::Result<MigrationStatus> {
+    debug!("Processing {:?}", &input.pretty_name);
+    if input.work_dir.exists() {
+        remove_dir_all(&input.work_dir)?;
+    }
+    create_dir_all(&input.work_dir)?;
+
+    match clu::migration::run_migration(&input).await {
+        Ok(pull) => return Ok(pull.into()),
+        Err(e) => {
+            warn!(
+                "There was a problem migration {}. Err: {:?}",
+                &input.pretty_name, e
+            );
+
+            return Ok(MigrationStatus::Other {
+                message: e.to_string()
+            });
+        }
+    };
 }
 
 fn configure_logging(logging_opts: &LoggingOpts) {

@@ -53,9 +53,39 @@ pub struct PrCreationDetails {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MigrationInput {
-    pub targets: BTreeMap<String, String>,
+    pub targets: BTreeMap<String, TargetDescription>,
     #[serde(flatten)]
     pub definition: MigrationDefinition,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case")]
+pub struct TargetDescription {
+    pub repo: String,
+    pub env: Option<BTreeMap<String, String>>,
+    pub migration_status: Option<MigrationStatus>,
+}
+
+impl TargetDescription {
+    pub fn new(repo: &str) -> Self {
+        Self {
+            repo: repo.to_owned(),
+            env: None,
+            migration_status: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "type")]
+#[serde(rename_all = "kebab-case")]
+pub enum MigrationStatus {
+    Other { message: String },
+    PreFlightFailed,
+    MigrationStepFailed { step_name: String },
+    PullRequestSkipped,
+    WorkingDirNotClean { files: String },
+    PullRequestCreated(PullRequest),
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +95,8 @@ pub struct MigrationTask {
     pub definition: MigrationDefinition,
     pub work_dir: PathBuf,
     pub github_token: String,
+    pub env: BTreeMap<String, String>,
+    pub dry_run: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -81,9 +113,4 @@ impl PullRequest {
             self.owner, self.repo, self.pr_number
         )
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CreatedPullRequests {
-    pub pulls: Vec<PullRequest>,
 }
