@@ -36,6 +36,8 @@ Using the `init` sub-command will create a `migration.toml` file in your current
 clu init
 ```
 
+Creates this `migration.toml`.
+
 ```toml
 [targets]
 dummy-repo = 'git@github.com:ethankhall/dummy-repo.git'
