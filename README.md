@@ -67,9 +67,9 @@ The names are required to be unique.
 
 ### Checkout
 
-`branch-name` is the name of the branch that will be created and pushed to GitHub. This should be
-garenteed to be unique. You should use something like `2021-03-21-upgrade-terraform-to-13`. This
-is because if the branch already exists, the migration *WILL FAIL*.
+`branch-name` is the name of the branch that will be created and pushed to GitHub. This name should
+be unique to your migration, and easy for others to understand.
+The recommendation is `YYYY-MM-DD-short-description`, and example is `2021-03-21-upgrade-terraform-to-13`.
 
 `pre-flight` is a command that will be run to see if the migration needs to be run. This should
 be used to help you. Instead of having to manage if a migration is done, and update the list of repos
@@ -99,18 +99,18 @@ to access files or other details relative to the `migration-script` you could us
 `DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"` to get the directory of the script.
 `DIR` is the directory that contains the script being run.
 
-When the script is complete, if there are any changes that are left uncommited, the step *WILL FAIL*.
+When the script is complete, if there are any changes that are left uncommitted, the step *WILL FAIL*.
 This is a design choice, if there are changes left uncommitted should they be? Instead of having this
 ambiguity, the migration will just fail. If you commit the changes OR run `git clean -dfx` then everything
 will succeed.
 
-Whenever your dont making changes, *you* must commit them. If you want to have a git message that's very
+Whenever your done making changes, *you* must commit them. If you want to have a git message that's very
 useful, you should use a file to commit the message by using `git commit -F message.txt`
 
 ## Running a Migration 
 
 ```bash
-clu run-migration --migration-defintion migration.toml
+clu run-migration --migration-definition migration.toml
 ```
 
 `migration.toml` defines the migration. Before starting processing, `clu` will create
@@ -129,7 +129,9 @@ work-dir
 ```
 
 `work-dir/some-repo-name/stdout.log` is the output from all scripts `standard out`.
+
 `work-dir/some-repo-name/stderr.log` is the output from all scripts `standard error`.
+
 `work-dir/some-repo-name/repo` is the directory that contains the result after the
 migration is complete.
 

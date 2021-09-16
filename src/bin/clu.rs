@@ -14,7 +14,7 @@ use clu::models::*;
 ///
 /// ## Run a Migration
 ///
-/// > clu run-migration --migration-defintion migration.toml
+/// > clu run-migration --migration-definition migration.toml
 ///
 /// When `clu` is done, it will update `migration.toml` (and save a backup).
 ///
@@ -60,7 +60,7 @@ pub struct RunMigrationArgs {
     /// A TOML file that defines the input needed to run a migration. This file will be updated
     /// with the results of the run.
     #[clap(long)]
-    pub migration_defintion: String,
+    pub migration_definition: String,
 
     /// Folder where the work will take place
     #[clap(long = "work-directory", default_value("work-dir"))]
@@ -222,14 +222,14 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     use std::sync::{Arc, Mutex};
 
     let mut migration_input: MigrationInput =
-        toml::from_str(&read_to_string(&args.migration_defintion)?)?;
+        toml::from_str(&read_to_string(&args.migration_definition)?)?;
 
     let seconds = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)?
         .as_secs();
     std::fs::copy(
-        &args.migration_defintion,
-        format!("{}.{}.bck", &args.migration_defintion, seconds),
+        &args.migration_definition,
+        format!("{}.{}.bck", &args.migration_definition, seconds),
     )?;
 
     debug!("targets: {:?}", &migration_input.targets);
@@ -282,7 +282,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     }
 
     let updated_migration_input = &toml::to_string_pretty(&migration_input)?;
-    let mut results = File::create(args.migration_defintion)?;
+    let mut results = File::create(args.migration_definition)?;
     results.write_all(updated_migration_input.as_bytes())?;
 
     Ok(())
