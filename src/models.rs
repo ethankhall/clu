@@ -97,6 +97,7 @@ pub struct MigrationTask {
     pub github_token: String,
     pub env: BTreeMap<String, String>,
     pub dry_run: bool,
+    pub migration_status: Option<MigrationStatus>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

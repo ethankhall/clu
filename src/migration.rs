@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 use tracing::{info, instrument};
 
-use crate::github::{create_pull_request, CreatePullRequest, GitHubRepo};
+use crate::github::{create_pull_request, update_pull_request, CreatePullRequest, GitHubRepo};
 use crate::models::{MigrationStatus, MigrationTask, PullRequest};
 use crate::workspace::Workspace;
 
@@ -107,18 +107,31 @@ async fn prepair_pr(
 ) -> AnyResult<PullRequest> {
     let definition = &task.definition;
 
-    workspace.run_command_successfully(&"git push").await?;
+    workspace.run_command_successfully(&"git push --force-with-lease").await?;
 
-    let pr_number = create_pull_request(
-        &task.github_token,
-        CreatePullRequest {
-            repo: &github_repo,
-            branch: &definition.checkout.branch_name,
-            title: &definition.pr.title,
-            body: &definition.pr.description,
-        },
-    )
-    .await?;
+    let pr_number = if let Some(MigrationStatus::PullRequestCreated(pr)) = &task.migration_status {
+        update_pull_request(
+            &task.github_token,
+            pr.pr_number,
+            CreatePullRequest {
+                repo: &github_repo,
+                branch: &definition.checkout.branch_name,
+                title: &definition.pr.title,
+                body: &definition.pr.description,
+            },
+        ).await?
+    } else {
+        create_pull_request(
+            &task.github_token,
+            CreatePullRequest {
+                repo: &github_repo,
+                branch: &definition.checkout.branch_name,
+                title: &definition.pr.title,
+                body: &definition.pr.description,
+            },
+        )
+        .await?
+    };
 
     Ok(PullRequest {
         owner: github_repo.owner.clone(),
@@ -207,12 +220,9 @@ async fn checkout_repo(task: &MigrationTask, workspace: &mut Workspace) -> AnyRe
         ))
         .await?;
     workspace.set_working_dir("repo");
-    workspace
-        .run_command_successfully(&format!(
-            "git checkout -b {}",
-            &definition.checkout.branch_name
-        ))
-        .await?;
 
+    let repo = Repository::open(git_repo.to_str().unwrap())?;
+    let mut branch = repo.branch(&definition.checkout.branch_name, &repo.head()?.peel_to_commit()?, true)?;
+    branch.set_upstream(Some(&format!("origin/{}", definition.checkout.branch_name)))?;
     Ok(())
 }

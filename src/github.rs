@@ -1,6 +1,6 @@
 use crate::models::PullRequest;
 use anyhow::Result as AnyResult;
-use hubcaps::pulls::PullOptions;
+use hubcaps::pulls::{PullEditOptions, PullOptions};
 use hubcaps::{Credentials, Github};
 use regex::Regex;
 use std::fmt;
@@ -14,9 +14,16 @@ pub struct CreatePullRequest<'a> {
     pub body: &'a str,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct GitHubRepo {
     pub owner: String,
     pub repo: String,
+}
+
+impl GitHubRepo {
+    fn new<G: Into<String>>(owner: G, repo: G) -> Self {
+        Self { owner: owner.into(), repo: repo.into() }
+    }
 }
 
 impl fmt::Display for GitHubRepo {
@@ -78,15 +85,22 @@ pub fn extract_github_info(url: &str) -> Result<GitHubRepo, GitHubError> {
 
     match re.captures(url) {
         Some(matches) => {
-            let owner = matches.name("owner").unwrap().as_str().to_string();
-            let repo = matches.name("repo").unwrap().as_str().to_string();
+            let owner = matches.name("owner").unwrap().as_str();
+            let repo = matches.name("repo").unwrap().as_str();
 
-            Ok(GitHubRepo { owner, repo })
+            Ok(GitHubRepo::new(owner, repo))
         }
         None => Err(GitHubError::UnableToDetermineRepo {
             path: url.to_owned(),
         }),
     }
+}
+
+#[test]
+fn validate_extract_github_info() {
+  assert_eq!(GitHubRepo::new("ethankhall", "clu"), extract_github_info("https://github.com/ethankhall/clu").unwrap());
+  assert_eq!(GitHubRepo::new("ethankhall", "clu"), extract_github_info("https://github.com/ethankhall/clu.git").unwrap());  
+  assert_eq!(GitHubRepo::new("ethankhall", "clu"), extract_github_info("git@github.com:ethankhall/clu.git").unwrap());    
 }
 
 pub async fn create_pull_request(
@@ -102,9 +116,9 @@ pub async fn create_pull_request(
     info!("Getting repo details for {}", &create_pr.repo);
     let repo_details = repo.get().await?;
 
+    let pulls = repo.pulls();
     info!("Creating PR for {}", &create_pr.repo);
 
-    let pulls = repo.pulls();
     let created = pulls
         .create(&PullOptions {
             title: create_pr.title.to_owned(),
@@ -117,4 +131,36 @@ pub async fn create_pull_request(
     info!("Created PR {}", created.url);
 
     Ok(created.number)
+}
+
+pub async fn update_pull_request(
+    github_token: &str,
+    pr_number: u64,
+    create_pr: CreatePullRequest<'_>,
+) -> Result<u64, GitHubError> {
+    let github = Github::new(
+        format!("clu/{}", env!("CARGO_PKG_VERSION")),
+        Credentials::Token(github_token.to_owned()),
+    )?;
+
+    let repo = github.repo(create_pr.repo.owner.clone(), create_pr.repo.repo.clone());
+    info!("Getting repo details for {}", &create_pr.repo);
+
+    let pulls = repo.pulls();
+
+    let existing_pr = pulls.get(pr_number);
+    let actual_pr = existing_pr.get().await?;
+
+    if actual_pr.state != "open" {
+        info!("PR ({}) was not open, making a new one", actual_pr.url);
+        return create_pull_request(github_token, create_pr).await
+    }
+    info!("Updating PR for {}", &create_pr.repo);
+    let updated_pr = existing_pr
+        .edit(&PullEditOptions::builder().title(create_pr.title).body(create_pr.body).build())
+        .await?;
+
+    info!("Updated PR {}", updated_pr.url);
+
+    Ok(updated_pr.number)
 }

@@ -3,6 +3,8 @@ use std::fs::{create_dir_all, read_to_string, remove_dir_all, File};
 use std::io::Write;
 use std::path::PathBuf;
 use futures::stream::{self, StreamExt};
+use std::time::SystemTime;
+
 
 use anyhow::Result as AnyResult;
 use tracing::{debug, info, warn};
@@ -46,11 +48,6 @@ pub struct RunMigrationArgs {
     /// with the results of the run.
     #[clap(long)]
     pub migration_defintion: String,
-
-    /// This file is the updated contents of the migration_defintion with
-    /// results.
-    #[clap(long)]
-    pub results_file: String,
 
     /// Folder where the work will take place
     #[clap(long = "work-directory")]
@@ -214,6 +211,9 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     let mut migration_input: MigrationInput =
         toml::from_str(&read_to_string(&args.migration_defintion)?)?;
 
+    let seconds = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+    std::fs::copy(&args.migration_defintion, format!("{}.{}.bck", &args.migration_defintion, seconds))?;
+
     debug!("targets: {:?}", &migration_input.targets);
     debug!("definition: {:?}", &migration_input);
 
@@ -226,7 +226,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
 
     let mut tasks = Vec::new();
     for (pretty_name, target) in &migration_input.targets {   
-        tasks.push((result_map.clone(),prepair_migration(&migration_input.definition, &args.github_token, args.skip_pull_request, &work_directory_root, &pretty_name, &target).await?));
+        tasks.push((result_map.clone(), prepair_migration(&migration_input.definition, &args.github_token, args.skip_pull_request, &work_directory_root, &pretty_name, &target).await?));
     }
 
     stream::iter(tasks).for_each_concurrent(3, |(result_map, task)| async move {
@@ -245,7 +245,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     }
 
     let updated_migration_input = &toml::to_string_pretty(&migration_input)?;
-    let mut results = File::create(args.results_file)?;
+    let mut results = File::create(args.migration_defintion)?;
     results.write_all(updated_migration_input.as_bytes())?;
 
     Ok(())
@@ -269,6 +269,7 @@ async fn prepair_migration(definition: &MigrationDefinition, github_token: &str,
         env,
         github_token: github_token.to_owned(),
         dry_run: skip_pull_request,
+        migration_status: target.migration_status.clone()
     })
 }
 
