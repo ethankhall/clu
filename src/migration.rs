@@ -1,4 +1,4 @@
-use anyhow::{Result as AnyResult};
+use anyhow::Result as AnyResult;
 use git2::Repository;
 use std::env::current_dir;
 use std::path::PathBuf;
@@ -107,7 +107,9 @@ async fn prepair_pr(
 ) -> AnyResult<PullRequest> {
     let definition = &task.definition;
 
-    workspace.run_command_successfully(&"git push --force-with-lease").await?;
+    workspace
+        .run_command_successfully(&"git push --force-with-lease")
+        .await?;
 
     let pr_number = if let Some(MigrationStatus::PullRequestCreated(pr)) = &task.migration_status {
         update_pull_request(
@@ -119,7 +121,8 @@ async fn prepair_pr(
                 title: &definition.pr.title,
                 body: &definition.pr.description,
             },
-        ).await?
+        )
+        .await?
     } else {
         create_pull_request(
             &task.github_token,
@@ -222,7 +225,11 @@ async fn checkout_repo(task: &MigrationTask, workspace: &mut Workspace) -> AnyRe
     workspace.set_working_dir("repo");
 
     let repo = Repository::open(git_repo.to_str().unwrap())?;
-    let mut branch = repo.branch(&definition.checkout.branch_name, &repo.head()?.peel_to_commit()?, true)?;
+    let mut branch = repo.branch(
+        &definition.checkout.branch_name,
+        &repo.head()?.peel_to_commit()?,
+        true,
+    )?;
     branch.set_upstream(Some(&format!("origin/{}", definition.checkout.branch_name)))?;
     Ok(())
 }

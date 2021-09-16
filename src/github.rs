@@ -22,7 +22,10 @@ pub struct GitHubRepo {
 
 impl GitHubRepo {
     fn new<G: Into<String>>(owner: G, repo: G) -> Self {
-        Self { owner: owner.into(), repo: repo.into() }
+        Self {
+            owner: owner.into(),
+            repo: repo.into(),
+        }
     }
 }
 
@@ -98,9 +101,18 @@ pub fn extract_github_info(url: &str) -> Result<GitHubRepo, GitHubError> {
 
 #[test]
 fn validate_extract_github_info() {
-  assert_eq!(GitHubRepo::new("ethankhall", "clu"), extract_github_info("https://github.com/ethankhall/clu").unwrap());
-  assert_eq!(GitHubRepo::new("ethankhall", "clu"), extract_github_info("https://github.com/ethankhall/clu.git").unwrap());  
-  assert_eq!(GitHubRepo::new("ethankhall", "clu"), extract_github_info("git@github.com:ethankhall/clu.git").unwrap());    
+    assert_eq!(
+        GitHubRepo::new("ethankhall", "clu"),
+        extract_github_info("https://github.com/ethankhall/clu").unwrap()
+    );
+    assert_eq!(
+        GitHubRepo::new("ethankhall", "clu"),
+        extract_github_info("https://github.com/ethankhall/clu.git").unwrap()
+    );
+    assert_eq!(
+        GitHubRepo::new("ethankhall", "clu"),
+        extract_github_info("git@github.com:ethankhall/clu.git").unwrap()
+    );
 }
 
 pub async fn create_pull_request(
@@ -153,11 +165,16 @@ pub async fn update_pull_request(
 
     if actual_pr.state != "open" {
         info!("PR ({}) was not open, making a new one", actual_pr.url);
-        return create_pull_request(github_token, create_pr).await
+        return create_pull_request(github_token, create_pr).await;
     }
     info!("Updating PR for {}", &create_pr.repo);
     let updated_pr = existing_pr
-        .edit(&PullEditOptions::builder().title(create_pr.title).body(create_pr.body).build())
+        .edit(
+            &PullEditOptions::builder()
+                .title(create_pr.title)
+                .body(create_pr.body)
+                .build(),
+        )
         .await?;
 
     info!("Updated PR {}", updated_pr.url);

@@ -1,10 +1,9 @@
-use clap::{ArgGroup, AppSettings, Clap};
+use clap::{AppSettings, ArgGroup, Clap};
+use futures::stream::{self, StreamExt};
 use std::fs::{create_dir_all, read_to_string, remove_dir_all, File};
 use std::io::Write;
 use std::path::PathBuf;
-use futures::stream::{self, StreamExt};
 use std::time::SystemTime;
-
 
 use anyhow::Result as AnyResult;
 use tracing::{debug, info, warn};
@@ -12,20 +11,20 @@ use tracing::{debug, info, warn};
 use clu::models::*;
 
 /// Clu is a migration tool, intended to make cross company migrations easier
-/// 
+///
 /// ## Run a Migration
-/// 
+///
 /// > clu run-migration --migration-defintion migration.toml
 ///
 /// When `clu` is done, it will update `migration.toml` (and save a backup).
-/// 
+///
 /// ## Check Status
-/// 
+///
 /// Checks the status of the PR's that were created.
-/// 
+///
 /// > clu check-status --results migration.toml
 #[derive(Clap, Debug)]
-#[clap(author, version,)]
+#[clap(author, version)]
 #[clap(setting = AppSettings::ColoredHelp)]
 pub struct Opts {
     #[clap(flatten)]
@@ -136,7 +135,7 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
     for (_name, target) in results.targets {
         let pull = match target.migration_status {
             Some(MigrationStatus::PullRequestCreated(pull)) => pull,
-            _ => continue
+            _ => continue,
         };
 
         let status = clu::github::fetch_pull_status(&args.github_token, &pull).await?;
@@ -219,14 +218,19 @@ async fn run_init() -> AnyResult<()> {
 }
 
 pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
-    use std::sync::{Arc, Mutex};
     use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
 
     let mut migration_input: MigrationInput =
         toml::from_str(&read_to_string(&args.migration_defintion)?)?;
 
-    let seconds = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
-    std::fs::copy(&args.migration_defintion, format!("{}.{}.bck", &args.migration_defintion, seconds))?;
+    let seconds = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)?
+        .as_secs();
+    std::fs::copy(
+        &args.migration_defintion,
+        format!("{}.{}.bck", &args.migration_defintion, seconds),
+    )?;
 
     debug!("targets: {:?}", &migration_input.targets);
     debug!("definition: {:?}", &migration_input);
@@ -239,23 +243,42 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     let result_map = Arc::new(Mutex::new(BTreeMap::default()));
 
     let mut tasks = Vec::new();
-    for (pretty_name, target) in &migration_input.targets {   
-        tasks.push((result_map.clone(), prepair_migration(&migration_input.definition, &args.github_token, args.skip_pull_request, &work_directory_root, &pretty_name, &target).await?));
+    for (pretty_name, target) in &migration_input.targets {
+        tasks.push((
+            result_map.clone(),
+            prepair_migration(
+                &migration_input.definition,
+                &args.github_token,
+                args.skip_pull_request,
+                &work_directory_root,
+                &pretty_name,
+                &target,
+            )
+            .await?,
+        ));
     }
 
-    stream::iter(tasks).for_each_concurrent(3, |(result_map, task)| async move {
-        let status = match run_single_migration(&task).await {
-            Err(e) => MigrationStatus::Other { message: e.to_string() },
-            Ok(status) => status
-        };
-        let mut result_map = result_map.lock().unwrap();
-        result_map.insert(task.pretty_name, status);
-    }).await;
+    stream::iter(tasks)
+        .for_each_concurrent(3, |(result_map, task)| async move {
+            let status = match run_single_migration(&task).await {
+                Err(e) => MigrationStatus::Other {
+                    message: e.to_string(),
+                },
+                Ok(status) => status,
+            };
+            let mut result_map = result_map.lock().unwrap();
+            result_map.insert(task.pretty_name, status);
+        })
+        .await;
 
     let result_map = result_map.lock().unwrap();
     for (pretty_name, status) in result_map.iter() {
         let status = status.clone();
-        migration_input.targets.get_mut(pretty_name).unwrap().migration_status = Some(status);
+        migration_input
+            .targets
+            .get_mut(pretty_name)
+            .unwrap()
+            .migration_status = Some(status);
     }
 
     let updated_migration_input = &toml::to_string_pretty(&migration_input)?;
@@ -265,8 +288,14 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     Ok(())
 }
 
-
-async fn prepair_migration(definition: &MigrationDefinition, github_token: &str, skip_pull_request: bool, work_directory_root: &str, pretty_name: &str, target: &TargetDescription) -> anyhow::Result<MigrationTask> {
+async fn prepair_migration(
+    definition: &MigrationDefinition,
+    github_token: &str,
+    skip_pull_request: bool,
+    work_directory_root: &str,
+    pretty_name: &str,
+    target: &TargetDescription,
+) -> anyhow::Result<MigrationTask> {
     debug!("Processing {:?}", &pretty_name);
     let target_dir = PathBuf::from(&work_directory_root).join(&pretty_name);
 
@@ -283,7 +312,7 @@ async fn prepair_migration(definition: &MigrationDefinition, github_token: &str,
         env,
         github_token: github_token.to_owned(),
         dry_run: skip_pull_request,
-        migration_status: target.migration_status.clone()
+        migration_status: target.migration_status.clone(),
     })
 }
 
@@ -303,7 +332,7 @@ async fn run_single_migration(input: &MigrationTask) -> anyhow::Result<Migration
             );
 
             return Ok(MigrationStatus::Other {
-                message: e.to_string()
+                message: e.to_string(),
             });
         }
     };
