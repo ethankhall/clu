@@ -41,9 +41,9 @@ pub enum ExpectedResults {
     PullRequest(PullRequest),
 }
 
-impl Into<MigrationStatus> for ExpectedResults {
-    fn into(self) -> MigrationStatus {
-        match self {
+impl From<ExpectedResults> for MigrationStatus {
+    fn from(result: ExpectedResults) -> MigrationStatus {
+        match result {
             ExpectedResults::DryRun => MigrationStatus::PullRequestSkipped,
             ExpectedResults::PreFlightCheckFailed => MigrationStatus::PreFlightFailed,
             ExpectedResults::WorkingDirNotClean { files } => {
@@ -74,24 +74,24 @@ pub async fn run_migration(task: &MigrationTask) -> Result<ExpectedResults, Migr
 
     let mut workspace = Workspace::new(&work_dir)?;
 
-    if let Err(e) = checkout_repo(&task, &mut workspace).await {
+    if let Err(e) = checkout_repo(task, &mut workspace).await {
         return Err(MigrationError::UnableToCheckoutRepo {
             repo: task.repo.clone(),
             source: e,
         });
     };
 
-    if run_preflight_check(&task, &mut workspace).await.is_err() {
+    if run_preflight_check(task, &mut workspace).await.is_err() {
         return Ok(ExpectedResults::PreFlightCheckFailed);
     };
 
-    match run_migration_script(&task, &mut workspace).await? {
+    match run_migration_script(task, &mut workspace).await? {
         ThisResult::Ok => {}
         ThisResult::ExpectedError(r) => return Ok(r),
     }
 
     if !task.dry_run {
-        match prepair_pr(&github_repo, &task, &mut workspace).await {
+        match prepair_pr(&github_repo, task, &mut workspace).await {
             Err(e) => Err(MigrationError::UnableToCreatePullRequest { source: e }),
             Ok(pr) => Ok(ExpectedResults::PullRequest(pr)),
         }
@@ -108,7 +108,7 @@ async fn prepair_pr(
     let definition = &task.definition;
 
     workspace
-        .run_command_successfully(&"git push --force-with-lease")
+        .run_command_successfully("git push --force-with-lease")
         .await?;
 
     let pr_number = if let Some(MigrationStatus::PullRequestCreated(pr)) = &task.migration_status {
@@ -116,7 +116,7 @@ async fn prepair_pr(
             &task.github_token,
             pr.pr_number,
             CreatePullRequest {
-                repo: &github_repo,
+                repo: github_repo,
                 branch: &definition.checkout.branch_name,
                 title: &definition.pr.title,
                 body: &definition.pr.description,
@@ -127,7 +127,7 @@ async fn prepair_pr(
         create_pull_request(
             &task.github_token,
             CreatePullRequest {
-                repo: &github_repo,
+                repo: github_repo,
                 branch: &definition.checkout.branch_name,
                 title: &definition.pr.title,
                 body: &definition.pr.description,
@@ -151,9 +151,10 @@ async fn run_migration_script(
 
     for step in &definition.steps {
         info!("Running {} for {}", step.name, task.pretty_name);
-        if let Err(_) = workspace
+        if workspace
             .run_command_successfully(&make_script_absolute(&step.migration_script)?)
             .await
+            .is_err()
         {
             return Ok(ThisResult::ExpectedError(
                 ExpectedResults::MigrationFailed {

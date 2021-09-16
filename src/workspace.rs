@@ -1,7 +1,7 @@
 use async_process::Command;
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 use thiserror::Error;
 use tracing::debug;
@@ -26,15 +26,15 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(workspace_dir: &PathBuf) -> Result<Self, std::io::Error> {
+    pub fn new(workspace_dir: &Path) -> Result<Self, std::io::Error> {
         let stdout = File::create(workspace_dir.join("stdout.log"))?;
         let stderr = File::create(workspace_dir.join("stderr.log"))?;
 
         Ok(Workspace {
             stdout,
             stderr,
-            root_dir: workspace_dir.clone(),
-            working_dir: workspace_dir.clone(),
+            root_dir: workspace_dir.to_path_buf(),
+            working_dir: workspace_dir.to_path_buf(),
         })
     }
 

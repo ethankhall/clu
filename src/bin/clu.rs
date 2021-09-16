@@ -251,8 +251,8 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
                 &args.github_token,
                 args.skip_pull_request,
                 &work_directory_root,
-                &pretty_name,
-                &target,
+                pretty_name,
+                target,
             )
             .await?,
         ));
@@ -308,7 +308,7 @@ async fn prepair_migration(
         pretty_name: pretty_name.to_owned(),
         repo: target.repo.clone(),
         definition: definition.clone(),
-        work_dir: target_dir.clone(),
+        work_dir: target_dir,
         env,
         github_token: github_token.to_owned(),
         dry_run: skip_pull_request,
@@ -323,19 +323,19 @@ async fn run_single_migration(input: &MigrationTask) -> anyhow::Result<Migration
     }
     create_dir_all(&input.work_dir)?;
 
-    match clu::migration::run_migration(&input).await {
-        Ok(pull) => return Ok(pull.into()),
+    match clu::migration::run_migration(input).await {
+        Ok(pull) => Ok(pull.into()),
         Err(e) => {
             warn!(
                 "There was a problem migration {}. Err: {:?}",
                 &input.pretty_name, e
             );
 
-            return Ok(MigrationStatus::Other {
+            Ok(MigrationStatus::Other {
                 message: e.to_string(),
-            });
+            })
         }
-    };
+    }
 }
 
 fn configure_logging(logging_opts: &LoggingOpts) {
