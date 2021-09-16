@@ -1,4 +1,4 @@
-use clap::{ArgGroup, Clap};
+use clap::{ArgGroup, AppSettings, Clap};
 use std::fs::{create_dir_all, read_to_string, remove_dir_all, File};
 use std::io::Write;
 use std::path::PathBuf;
@@ -11,8 +11,22 @@ use tracing::{debug, info, warn};
 
 use clu::models::*;
 
+/// Clu is a migration tool, intended to make cross company migrations easier
+/// 
+/// ## Run a Migration
+/// 
+/// > clu run-migration --migration-defintion migration.toml
+///
+/// When `clu` is done, it will update `migration.toml` (and save a backup).
+/// 
+/// ## Check Status
+/// 
+/// Checks the status of the PR's that were created.
+/// 
+/// > clu check-status --results migration.toml
 #[derive(Clap, Debug)]
-#[clap(author, about, version)]
+#[clap(author, version,)]
+#[clap(setting = AppSettings::ColoredHelp)]
 pub struct Opts {
     #[clap(flatten)]
     pub logging_opts: LoggingOpts,
@@ -50,7 +64,7 @@ pub struct RunMigrationArgs {
     pub migration_defintion: String,
 
     /// Folder where the work will take place
-    #[clap(long = "work-directory")]
+    #[clap(long = "work-directory", default_value("work-dir"))]
     pub work_directory_root: String,
 
     /// Token to be used when talking to GitHub

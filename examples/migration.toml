@@ -5,7 +5,7 @@ repo = 'git@github.com:ethankhall/dummy-repo.git'
 type = 'pull-request-created'
 owner = 'ethankhall'
 repo = 'dummy-repo'
-pr_number = 8
+pr_number = 9
 
 [checkout]
 branch-name = 'ethankhall/foo-example'
