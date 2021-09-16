@@ -107,7 +107,7 @@ will succeed.
 Whenever your dont making changes, *you* must commit them. If you want to have a git message that's very
 useful, you should use a file to commit the message by using `git commit -F message.txt`
 
-### Running a Migration 
+## Running a Migration 
 
 ```bash
 clu run-migration --migration-defintion migration.toml
@@ -133,7 +133,7 @@ work-dir
 `work-dir/some-repo-name/repo` is the directory that contains the result after the
 migration is complete.
 
-### Checking the status of a Migration
+## Checking the status of a Migration
 
 After a migration completes the PR status can be checked with
 
