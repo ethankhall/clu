@@ -40,7 +40,7 @@ Creates this `migration.toml`.
 
 ```toml
 [targets]
-dummy-repo = 'git@github.com:ethankhall/dummy-repo.git'
+dummy-repo = { repo = "git@github.com:ethankhall/dummy-repo.git" }
 
 [checkout]
 branch-name = 'ethankhall/foo-example'
