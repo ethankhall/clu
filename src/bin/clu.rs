@@ -46,9 +46,10 @@ pub enum SubCommand {
 
 #[derive(Clap, Debug)]
 pub struct CheckStatusArgs {
-    /// When a repo is migrated, it will be written into this file so other commands can use them.
+    /// A TOML file that defines the input needed to run a migration. This file will be updated
+    /// with the results of the run.
     #[clap(long)]
-    pub results: String,
+    pub migration_definition: String,
 
     /// Token to be used when talking to GitHub
     #[clap(long, env = "GITHUB_TOKEN")]
@@ -131,7 +132,7 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
     let mut mergeable: Vec<String> = Vec::new();
     let mut merged: Vec<String> = Vec::new();
 
-    let results: MigrationInput = toml::from_str(&read_to_string(args.results)?)?;
+    let results: MigrationInput = toml::from_str(&read_to_string(args.migration_definition)?)?;
     for (_name, target) in results.targets {
         let pull = match target.migration_status {
             Some(MigrationStatus::PullRequestCreated(pull)) => pull,

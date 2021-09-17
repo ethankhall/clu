@@ -36,7 +36,7 @@ pub enum MigrationError {
 pub enum ExpectedResults {
     DryRun,
     PreFlightCheckFailed,
-    WorkingDirNotClean { files: String },
+    WorkingDirNotClean { files: Vec<String> },
     MigrationFailed { step: String },
     PullRequest(PullRequest),
 }
@@ -176,9 +176,7 @@ async fn run_migration_script(
             .collect();
 
         return Ok(ThisResult::ExpectedError(
-            ExpectedResults::WorkingDirNotClean {
-                files: files.join(", "),
-            },
+            ExpectedResults::WorkingDirNotClean { files },
         ));
     }
 
@@ -188,10 +186,14 @@ async fn run_migration_script(
 async fn run_preflight_check(task: &MigrationTask, workspace: &mut Workspace) -> AnyResult<()> {
     let definition = &task.definition;
     info!("Running pre-flight check for {}", task.pretty_name);
-    workspace
+    if let Err(e) = workspace
         .run_command_successfully(&make_script_absolute(&definition.checkout.pre_flight)?)
-        .await?;
-    info!("Preflight check was successful");
+        .await
+    {
+        info!("Preflight check determined the migration is complete.");
+        anyhow::bail!(e);
+    }
+    info!("Preflight check determined the migration should be run.");
 
     Ok(())
 }
@@ -225,12 +227,21 @@ async fn checkout_repo(task: &MigrationTask, workspace: &mut Workspace) -> AnyRe
         .await?;
     workspace.set_working_dir("repo");
 
+    info!("Creating {} branch", &definition.checkout.branch_name);
     let repo = Repository::open(git_repo.to_str().unwrap())?;
-    let mut branch = repo.branch(
+    repo.branch(
         &definition.checkout.branch_name,
         &repo.head()?.peel_to_commit()?,
         true,
     )?;
-    branch.set_upstream(Some(&format!("origin/{}", definition.checkout.branch_name)))?;
+
+    repo.config()?.set_str("push.default", "current")?;
+
+    let obj = repo.revparse_single(&format!("refs/heads/{}", definition.checkout.branch_name))?;
+
+    repo.checkout_tree(&obj, None)?;
+
+    repo.set_head(&format!("refs/heads/{}", definition.checkout.branch_name))?;
+
     Ok(())
 }

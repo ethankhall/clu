@@ -140,7 +140,7 @@ pub async fn create_pull_request(
         })
         .await?;
 
-    info!("Created PR {}", created.url);
+    info!("Created PR {}", created.html_url);
 
     Ok(created.number)
 }
@@ -177,7 +177,7 @@ pub async fn update_pull_request(
         )
         .await?;
 
-    info!("Updated PR {}", updated_pr.url);
+    info!("Updated PR {}", updated_pr.html_url);
 
     Ok(updated_pr.number)
 }

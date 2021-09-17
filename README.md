@@ -140,7 +140,7 @@ migration is complete.
 After a migration completes the PR status can be checked with
 
 ```bash
-clu check-status --results migration.toml
+clu check-status --migration-definition migration.toml
 ```
 
 The CLI will output a markdown styled output to standard out of the status of the migration.

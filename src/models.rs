@@ -84,7 +84,7 @@ pub enum MigrationStatus {
     PreFlightFailed,
     MigrationStepFailed { step_name: String },
     PullRequestSkipped,
-    WorkingDirNotClean { files: String },
+    WorkingDirNotClean { files: Vec<String> },
     PullRequestCreated(PullRequest),
 }
 
