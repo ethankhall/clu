@@ -1,13 +1,13 @@
 use anyhow::Result as AnyResult;
 use git2::Repository;
+use std::collections::BTreeMap;
 use std::env::current_dir;
 use std::path::PathBuf;
 use thiserror::Error;
 use tracing::{info, instrument};
-use std::collections::BTreeMap;
 
 use crate::github::{create_pull_request, update_pull_request, CreatePullRequest, GitHubRepo};
-use crate::models::{MigrationDefinition, CreatedPullRequest};
+use crate::models::{CreatedPullRequest, MigrationDefinition};
 use crate::workspace::Workspace;
 
 #[derive(Debug, Clone)]
@@ -136,7 +136,7 @@ async fn prepair_pr(
 
     Ok(CreatedPullRequest {
         pr_number: pr_output.number,
-        url: pr_output.permalink
+        url: pr_output.permalink,
     })
 }
 

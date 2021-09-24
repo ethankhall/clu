@@ -82,4 +82,3 @@ pub struct CreatedPullRequest {
     #[serde(default)]
     pub url: String,
 }
-

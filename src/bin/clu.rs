@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use anyhow::Result as AnyResult;
-use tracing::{debug, info, error, warn};
+use tracing::{debug, error, info, warn};
 
 use clu::migration::{ExpectedResults, MigrationTask};
 use clu::models::*;
@@ -95,7 +95,7 @@ pub struct LoggingOpts {
 
 enum MigrationResult {
     PullRequest(CreatedPullRequest),
-    Error(String)
+    Error(String),
 }
 
 impl LoggingOpts {
@@ -147,7 +147,8 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
 
         let github_repo = clu::github::extract_github_info(&target.repo)?;
 
-        let state = clu::github::fetch_pull_state(&args.github_token, &github_repo, pull.pr_number).await?;
+        let state =
+            clu::github::fetch_pull_state(&args.github_token, &github_repo, pull.pr_number).await?;
 
         match state.status {
             PullStatus::ChecksFailed => checks_failed.push(format!("- {}", state.permalink)),
@@ -281,7 +282,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     let mut error_log = Vec::default();
     let result_map = result_map.lock().unwrap();
     for (pretty_name, status) in result_map.iter() {
-        let status = status.clone();
+        let status = &status;
 
         match status {
             MigrationResult::PullRequest(pr) => {
@@ -290,10 +291,13 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
                     .get_mut(pretty_name)
                     .unwrap()
                     .pull_request = Some(pr.clone())
-            },
+            }
             MigrationResult::Error(e) => {
                 warn!("{}: Unable to run migration because of {}", pretty_name, e);
-                error_log.push(format!("{}: Unable to run migration because of {}", pretty_name, e));
+                error_log.push(format!(
+                    "{}: Unable to run migration because of {}",
+                    pretty_name, e
+                ));
             }
         }
     }
