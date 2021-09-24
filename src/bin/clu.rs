@@ -8,7 +8,7 @@ use std::time::SystemTime;
 use anyhow::Result as AnyResult;
 use tracing::{debug, info, warn};
 
-use clu::migration::ExpectedResults;
+use clu::migration::{ExpectedResults, MigrationTask};
 use clu::models::*;
 
 /// Clu is a migration tool, intended to make cross company migrations easier
@@ -138,7 +138,7 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
     let mut mergeable: Vec<String> = Vec::new();
     let mut merged: Vec<String> = Vec::new();
 
-    let results: MigrationInput = toml::from_str(&read_to_string(args.migration_definition)?)?;
+    let results: MigrationFile = toml::from_str(&read_to_string(args.migration_definition)?)?;
     for (_name, target) in results.targets {
         let pull = match target.pull_request {
             Some(pull) => pull,
@@ -210,7 +210,7 @@ async fn run_init() -> AnyResult<()> {
         }],
     };
 
-    let migration_input = MigrationInput {
+    let migration_input = MigrationFile {
         targets,
         definition,
     };
@@ -228,7 +228,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
-    let mut migration_input: MigrationInput =
+    let mut migration_input: MigrationFile =
         toml::from_str(&read_to_string(&args.migration_definition)?)?;
 
     let seconds = SystemTime::now()

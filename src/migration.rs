@@ -4,10 +4,23 @@ use std::env::current_dir;
 use std::path::PathBuf;
 use thiserror::Error;
 use tracing::{info, instrument};
+use std::collections::BTreeMap;
 
 use crate::github::{create_pull_request, update_pull_request, CreatePullRequest, GitHubRepo};
-use crate::models::{MigrationTask, CreatedPullRequest};
+use crate::models::{MigrationDefinition, CreatedPullRequest};
 use crate::workspace::Workspace;
+
+#[derive(Debug, Clone)]
+pub struct MigrationTask {
+    pub pretty_name: String,
+    pub repo: String,
+    pub definition: MigrationDefinition,
+    pub work_dir: PathBuf,
+    pub github_token: String,
+    pub env: BTreeMap<String, String>,
+    pub dry_run: bool,
+    pub pull_request: Option<CreatedPullRequest>,
+}
 
 #[derive(Error, Debug)]
 pub enum MigrationError {

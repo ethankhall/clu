@@ -29,7 +29,7 @@ pub struct CreatePullRequestMigration;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "src/graphql/schema.docs.graphql",
-    query_path = "src/graphql/CreatePullRequest.graphql",
+    query_path = "src/graphql/GetRepositoryQuery.graphql",
     response_derives = "Debug,PartialEq"
 )]
 pub struct GetRepositoryQuery;
@@ -93,6 +93,7 @@ pub async fn post_graphql<Q: GraphQLQuery>(
     variables: Q::Variables,
 ) -> Result<graphql_client::Response<Q::ResponseData>, reqwest::Error> {
     let body = Q::build_query(variables);
+    debug!("GitHub Body: {:?}", serde_json::to_string(&body));
     let reqwest_response = client.post("https://api.github.com/graphql").json(&body).send().await?;
 
     Ok(reqwest_response.json().await?)
@@ -206,7 +207,7 @@ pub async fn create_pull_request(
     let variables = create_pull_request_migration::Variables {
         repository_id: repo_details.id,
         base_ref: repo_details.target_branch,
-        head_ref: format!("{}/{}", repo_details.prefix, create_pr.branch),
+        head_ref: format!("{}{}", repo_details.prefix, create_pr.branch),
         body: create_pr.body.to_owned(),
         title: create_pr.title.to_owned(),
     };
@@ -293,7 +294,7 @@ async fn fetch_repo_details(client: &reqwest::Client, owner: String, repo: Strin
         None => bail!(GitHubError::NoDefaultBranch { owner: owner.clone(), repo: repo.clone() } )
     };
 
-    let target_branch_name = format!("{}/{}", default_branch.prefix, default_branch.name);
+    let target_branch_name = format!("{}{}", default_branch.prefix, default_branch.name);
     debug!("Target Branch: {}", target_branch_name);
 
     Ok(GithubApiRepo {

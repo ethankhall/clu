@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "kebab-case")]
@@ -52,7 +51,7 @@ pub struct PrCreationDetails {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct MigrationInput {
+pub struct MigrationFile {
     pub targets: BTreeMap<String, TargetDescription>,
     #[serde(flatten)]
     pub definition: MigrationDefinition,
@@ -63,6 +62,7 @@ pub struct MigrationInput {
 pub struct TargetDescription {
     pub repo: String,
     pub env: Option<BTreeMap<String, String>>,
+    #[serde(default)]
     pub pull_request: Option<CreatedPullRequest>,
 }
 
@@ -74,18 +74,6 @@ impl TargetDescription {
             pull_request: None,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct MigrationTask {
-    pub pretty_name: String,
-    pub repo: String,
-    pub definition: MigrationDefinition,
-    pub work_dir: PathBuf,
-    pub github_token: String,
-    pub env: BTreeMap<String, String>,
-    pub dry_run: bool,
-    pub pull_request: Option<CreatedPullRequest>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

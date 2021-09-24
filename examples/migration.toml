@@ -1,11 +1,10 @@
 [targets.dummy-repo]
 repo = 'git@github.com:ethankhall/dummy-repo.git'
 
-[targets.dummy-repo.migration-status]
-type = 'pull-request-created'
+[targets.dummy-repo.pull-request]
 owner = 'ethankhall'
 repo = 'dummy-repo'
-pr_number = 9
+pr_number = 14
 
 [checkout]
 branch-name = 'ethankhall/foo-example'
