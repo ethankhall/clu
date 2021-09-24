@@ -1,0 +1,21 @@
+query GetPullRequestStatusQuery($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      id
+      state
+      merged
+      mergeable
+      permalink
+      commits(last: 1) {
+        nodes {
+          commit {
+            statusCheckRollup {
+              state
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use anyhow::Result as AnyResult;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
+use clu::migration::{ExpectedResults, MigrationTask};
 use clu::models::*;
 
 /// Clu is a migration tool, intended to make cross company migrations easier
@@ -92,6 +93,11 @@ pub struct LoggingOpts {
     pub error: bool,
 }
 
+enum MigrationResult {
+    PullRequest(CreatedPullRequest),
+    Error(String),
+}
+
 impl LoggingOpts {
     pub fn to_level(&self) -> tracing::Level {
         use tracing::Level;
@@ -132,20 +138,23 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
     let mut mergeable: Vec<String> = Vec::new();
     let mut merged: Vec<String> = Vec::new();
 
-    let results: MigrationInput = toml::from_str(&read_to_string(args.migration_definition)?)?;
+    let results: MigrationFile = toml::from_str(&read_to_string(args.migration_definition)?)?;
     for (_name, target) in results.targets {
-        let pull = match target.migration_status {
-            Some(MigrationStatus::PullRequestCreated(pull)) => pull,
+        let pull = match target.pull_request {
+            Some(pull) => pull,
             _ => continue,
         };
 
-        let status = clu::github::fetch_pull_status(&args.github_token, &pull).await?;
+        let github_repo = clu::github::extract_github_info(&target.repo)?;
 
-        match status {
-            PullStatus::ChecksFailed => checks_failed.push(format!("- {}", pull.to_url())),
-            PullStatus::NeedsApproval => not_approved.push(format!("- {}", pull.to_url())),
-            PullStatus::Mergeable => mergeable.push(format!("- {}", pull.to_url())),
-            PullStatus::Merged => mergeable.push(format!("- {}", pull.to_url())),
+        let state =
+            clu::github::fetch_pull_state(&args.github_token, &github_repo, pull.pr_number).await?;
+
+        match state.status {
+            PullStatus::ChecksFailed => checks_failed.push(format!("- {}", state.permalink)),
+            PullStatus::NeedsApproval => not_approved.push(format!("- {}", state.permalink)),
+            PullStatus::Mergeable => mergeable.push(format!("- {}", state.permalink)),
+            PullStatus::Merged => mergeable.push(format!("- {}", state.permalink)),
         }
     }
 
@@ -204,7 +213,7 @@ async fn run_init() -> AnyResult<()> {
         }],
     };
 
-    let migration_input = MigrationInput {
+    let migration_input = MigrationFile {
         targets,
         definition,
     };
@@ -222,15 +231,15 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
-    let mut migration_input: MigrationInput =
+    let mut migration_input: MigrationFile =
         toml::from_str(&read_to_string(&args.migration_definition)?)?;
 
-    let seconds = SystemTime::now()
+    let epoch_start = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)?
         .as_secs();
     std::fs::copy(
         &args.migration_definition,
-        format!("{}.{}.bck", &args.migration_definition, seconds),
+        format!("{}.{}.bck", &args.migration_definition, epoch_start),
     )?;
 
     debug!("targets: {:?}", &migration_input.targets);
@@ -262,9 +271,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     stream::iter(tasks)
         .for_each_concurrent(3, |(result_map, task)| async move {
             let status = match run_single_migration(&task).await {
-                Err(e) => MigrationStatus::Other {
-                    message: e.to_string(),
-                },
+                Err(e) => MigrationResult::Error(e.to_string()),
                 Ok(status) => status,
             };
             let mut result_map = result_map.lock().unwrap();
@@ -272,19 +279,38 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
         })
         .await;
 
+    let mut error_log = Vec::default();
     let result_map = result_map.lock().unwrap();
     for (pretty_name, status) in result_map.iter() {
-        let status = status.clone();
-        migration_input
-            .targets
-            .get_mut(pretty_name)
-            .unwrap()
-            .migration_status = Some(status);
+        let status = &status;
+
+        match status {
+            MigrationResult::PullRequest(pr) => {
+                migration_input
+                    .targets
+                    .get_mut(pretty_name)
+                    .unwrap()
+                    .pull_request = Some(pr.clone())
+            }
+            MigrationResult::Error(e) => {
+                warn!("{}: Unable to run migration because of {}", pretty_name, e);
+                error_log.push(format!(
+                    "{}: Unable to run migration because of {}",
+                    pretty_name, e
+                ));
+            }
+        }
     }
 
     let updated_migration_input = &toml::to_string_pretty(&migration_input)?;
     let mut results = File::create(args.migration_definition)?;
     results.write_all(updated_migration_input.as_bytes())?;
+
+    if !error_log.is_empty() {
+        let mut error_results = File::create("migration.errors.txt")?;
+        error_results.write_all(error_log.join("\n").as_bytes())?;
+        error!("Created migration.errors.txt with the summary of errors");
+    }
 
     Ok(())
 }
@@ -313,28 +339,27 @@ async fn prepair_migration(
         env,
         github_token: github_token.to_owned(),
         dry_run: skip_pull_request,
-        migration_status: target.migration_status.clone(),
+        pull_request: target.pull_request.clone(),
     })
 }
 
-async fn run_single_migration(input: &MigrationTask) -> anyhow::Result<MigrationStatus> {
+async fn run_single_migration(input: &MigrationTask) -> anyhow::Result<MigrationResult> {
     debug!("Processing {:?}", &input.pretty_name);
     if input.work_dir.exists() {
         remove_dir_all(&input.work_dir)?;
     }
     create_dir_all(&input.work_dir)?;
 
-    match clu::migration::run_migration(input).await {
-        Ok(pull) => Ok(pull.into()),
+    match clu::migration::run_migration_task(input).await {
+        Ok(ExpectedResults::PullRequest(pull)) => Ok(MigrationResult::PullRequest(pull)),
+        Ok(other) => Ok(MigrationResult::Error(format!("{:?}", other))),
         Err(e) => {
             warn!(
                 "There was a problem migration {}. Err: {:?}",
                 &input.pretty_name, e
             );
 
-            Ok(MigrationStatus::Other {
-                message: e.to_string(),
-            })
+            Ok(MigrationResult::Error(e.to_string()))
         }
     }
 }

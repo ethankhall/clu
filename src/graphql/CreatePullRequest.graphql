@@ -1,0 +1,9 @@
+mutation CreatePullRequestMigration($repositoryId: ID!, $baseRef: String!, $headRef: String!, $title: String!, $body: String!) {
+  createPullRequest(input: {repositoryId: $repositoryId, baseRefName: $baseRef, headRefName: $headRef, title: $title, body: $body} ) {
+    pullRequest {
+      number
+      permalink
+    }
+  }
+}
+

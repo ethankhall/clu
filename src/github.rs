@@ -1,11 +1,45 @@
-use crate::models::PullRequest;
-use anyhow::Result as AnyResult;
-use hubcaps::pulls::{PullEditOptions, PullOptions};
-use hubcaps::{Credentials, Github};
+use anyhow::{bail, Result as AnyResult};
+use graphql_client::GraphQLQuery;
 use regex::Regex;
+use reqwest::Client;
 use std::fmt;
 use thiserror::Error;
 use tracing::{debug, info};
+
+#[allow(clippy::upper_case_acronyms)]
+type URI = String;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/schema.docs.graphql",
+    query_path = "src/graphql/GetPullRequestStatusQuery.graphql",
+    response_derives = "Debug,PartialEq"
+)]
+pub struct GetPullRequestStatusQuery;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/schema.docs.graphql",
+    query_path = "src/graphql/CreatePullRequest.graphql",
+    response_derives = "Debug,PartialEq"
+)]
+pub struct CreatePullRequestMigration;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/schema.docs.graphql",
+    query_path = "src/graphql/GetRepositoryQuery.graphql",
+    response_derives = "Debug,PartialEq"
+)]
+pub struct GetRepositoryQuery;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/schema.docs.graphql",
+    query_path = "src/graphql/UpdatePullRequest.graphql",
+    response_derives = "Debug,PartialEq"
+)]
+pub struct UpdatePullRequestMutation;
 
 pub struct CreatePullRequest<'a> {
     pub repo: &'a GitHubRepo,
@@ -29,6 +63,12 @@ impl GitHubRepo {
     }
 }
 
+#[derive(Debug)]
+pub struct PullReqeustOutput {
+    pub number: i64,
+    pub permalink: String,
+}
+
 impl fmt::Display for GitHubRepo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}/{}", self.owner, self.repo)
@@ -39,8 +79,42 @@ impl fmt::Display for GitHubRepo {
 pub enum GitHubError {
     #[error("Unable to determine GitHub owner/repo from {path}")]
     UnableToDetermineRepo { path: String },
+    #[error("GraphQL responded with errors: {error}")]
+    GraphQlError { error: String },
+    #[error("Repository {owner}/{repo} does not exist")]
+    NoSuchRepository { owner: String, repo: String },
+    #[error("Pull Request {owner}/{repo}/{number} does not exist")]
+    NoSuchPullRequest {
+        owner: String,
+        repo: String,
+        number: i64,
+    },
+    #[error("Repository {owner}/{repo} has no default branch")]
+    NoDefaultBranch { owner: String, repo: String },
+    #[error("Unable to create Pull Request")]
+    UnableToCreatePullRequest,
     #[error(transparent)]
-    HubcapError(#[from] hubcaps::Error),
+    NetworkError(#[from] anyhow::Error),
+}
+
+pub async fn post_graphql<Q: GraphQLQuery>(
+    client: &reqwest::Client,
+    variables: Q::Variables,
+) -> Result<graphql_client::Response<Q::ResponseData>, reqwest::Error> {
+    let body = Q::build_query(variables);
+    debug!("GitHub Body: {:?}", serde_json::to_string(&body));
+    let reqwest_response = client
+        .post("https://api.github.com/graphql")
+        .json(&body)
+        .send()
+        .await?;
+
+    Ok(reqwest_response.json().await?)
+}
+
+pub struct PullState {
+    pub status: PullStatus,
+    pub permalink: String,
 }
 
 pub enum PullStatus {
@@ -50,34 +124,67 @@ pub enum PullStatus {
     Merged,
 }
 
-pub async fn fetch_pull_status(github_token: &str, pull: &PullRequest) -> AnyResult<PullStatus> {
-    let github = Github::new(
-        format!("clu/{}", env!("CARGO_PKG_VERSION")),
-        Credentials::Token(github_token.to_owned()),
-    )?;
+pub async fn fetch_pull_state(
+    github_token: &str,
+    repo: &GitHubRepo,
+    pr_number: i64,
+) -> AnyResult<PullState> {
+    let client = Client::builder()
+        .user_agent(format!("clu/{}", env!("CARGO_PKG_VERSION")))
+        .default_headers(
+            std::iter::once((
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", github_token))
+                    .unwrap(),
+            ))
+            .collect(),
+        )
+        .build()?;
 
-    let repo = github.repo(pull.owner.clone(), pull.repo.clone());
-    let pulls = repo.pulls();
-    let gh_pr = pulls.get(pull.pr_number).get().await?;
+    let gh_pull =
+        fetch_pr_details(&client, repo.owner.clone(), repo.repo.clone(), pr_number).await?;
 
-    let statuses = repo.statuses().list(&gh_pr.head.sha).await?;
-    debug!("Statuses {:?}", statuses);
-
-    if gh_pr.merged {
-        return Ok(PullStatus::Merged);
+    if gh_pull.merged {
+        return Ok(PullState {
+            permalink: gh_pull.permalink,
+            status: PullStatus::Merged,
+        });
     }
 
-    let checks_pass = statuses
-        .iter()
-        .all(|x| x.state == hubcaps::statuses::State::Success);
-    if checks_pass {
-        return Ok(PullStatus::ChecksFailed);
+    if gh_pull.mergeable == get_pull_request_status_query::MergeableState::MERGEABLE {
+        return Ok(PullState {
+            permalink: gh_pull.permalink,
+            status: PullStatus::Mergeable,
+        });
     }
 
-    if gh_pr.mergeable == Some(true) {
-        Ok(PullStatus::Mergeable)
-    } else {
-        Ok(PullStatus::NeedsApproval)
+    let gh_nodes = gh_pull.commits.nodes.unwrap_or_default();
+    let gh_commit = match &gh_nodes.first() {
+        Some(Some(commit)) => commit,
+        _ => {
+            return Ok(PullState {
+                permalink: gh_pull.permalink,
+                status: PullStatus::ChecksFailed,
+            })
+        }
+    };
+
+    match &gh_commit.commit.status_check_rollup {
+        Some(check) => match check.state {
+            get_pull_request_status_query::StatusState::SUCCESS
+            | get_pull_request_status_query::StatusState::PENDING => Ok(PullState {
+                permalink: gh_pull.permalink,
+                status: PullStatus::Mergeable,
+            }),
+            _ => Ok(PullState {
+                permalink: gh_pull.permalink,
+                status: PullStatus::ChecksFailed,
+            }),
+        },
+        None => Ok(PullState {
+            permalink: gh_pull.permalink,
+            status: PullStatus::ChecksFailed,
+        }),
     }
 }
 
@@ -118,66 +225,225 @@ fn validate_extract_github_info() {
 pub async fn create_pull_request(
     github_token: &str,
     create_pr: CreatePullRequest<'_>,
-) -> Result<u64, GitHubError> {
-    let github = Github::new(
-        format!("clu/{}", env!("CARGO_PKG_VERSION")),
-        Credentials::Token(github_token.to_owned()),
-    )?;
+) -> Result<PullReqeustOutput, anyhow::Error> {
+    let client = Client::builder()
+        .user_agent(format!("clu/{}", env!("CARGO_PKG_VERSION")))
+        .default_headers(
+            std::iter::once((
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", github_token))
+                    .unwrap(),
+            ))
+            .collect(),
+        )
+        .build()?;
 
-    let repo = github.repo(create_pr.repo.owner.clone(), create_pr.repo.repo.clone());
-    info!("Getting repo details for {}", &create_pr.repo);
-    let repo_details = repo.get().await?;
+    let repo_details = fetch_repo_details(
+        &client,
+        create_pr.repo.owner.clone(),
+        create_pr.repo.repo.clone(),
+    )
+    .await?;
 
-    let pulls = repo.pulls();
-    info!("Creating PR for {}", &create_pr.repo);
+    let variables = create_pull_request_migration::Variables {
+        repository_id: repo_details.id,
+        base_ref: repo_details.target_branch,
+        head_ref: format!("{}{}", repo_details.prefix, create_pr.branch),
+        body: create_pr.body.to_owned(),
+        title: create_pr.title.to_owned(),
+    };
 
-    let created = pulls
-        .create(&PullOptions {
-            title: create_pr.title.to_owned(),
-            head: create_pr.branch.to_owned(),
-            base: repo_details.default_branch,
-            body: Some(create_pr.body.to_owned()),
-        })
-        .await?;
+    let created_pr = post_graphql::<CreatePullRequestMigration>(&client, variables).await?;
 
-    info!("Created PR {}", created.html_url);
+    debug!("GitHub Response: {:?}", created_pr);
 
-    Ok(created.number)
+    let response_data: create_pull_request_migration::ResponseData = match created_pr.data {
+        Some(data) => data,
+        None => bail!(GitHubError::GraphQlError {
+            error: format!("{:?}", created_pr.errors)
+        }),
+    };
+
+    let pr = match response_data
+        .create_pull_request
+        .map(|it| it.pull_request)
+        .flatten()
+    {
+        Some(pr) => pr,
+        None => bail!(GitHubError::UnableToCreatePullRequest),
+    };
+
+    info!("Create PR at {}", pr.permalink);
+
+    Ok(PullReqeustOutput {
+        number: pr.number,
+        permalink: pr.permalink,
+    })
+}
+
+async fn fetch_pr_details(
+    client: &reqwest::Client,
+    owner: String,
+    repo: String,
+    pr_number: i64,
+) -> AnyResult<get_pull_request_status_query::GetPullRequestStatusQueryRepositoryPullRequest> {
+    let variables = get_pull_request_status_query::Variables {
+        owner: owner.clone(),
+        repo: repo.clone(),
+        number: pr_number,
+    };
+
+    info!("Getting repo details for {}/{}", &owner, &repo);
+
+    let pr_status = post_graphql::<GetPullRequestStatusQuery>(client, variables).await?;
+
+    debug!("GitHub Response: {:?}", pr_status);
+
+    let response_data: get_pull_request_status_query::ResponseData = match pr_status.data {
+        Some(data) => data,
+        None => bail!(GitHubError::GraphQlError {
+            error: format!("{:?}", pr_status.errors)
+        }),
+    };
+
+    let gh_repository = match response_data.repository {
+        Some(r) => r,
+        None => bail!(GitHubError::NoSuchRepository {
+            owner: owner.clone(),
+            repo: repo.clone()
+        }),
+    };
+
+    match gh_repository.pull_request {
+        Some(r) => Ok(r),
+        None => bail!(GitHubError::NoSuchPullRequest {
+            owner: owner.clone(),
+            repo: repo.clone(),
+            number: pr_number
+        }),
+    }
+}
+
+struct GithubApiRepo {
+    id: String,
+    target_branch: String,
+    prefix: String,
+}
+
+async fn fetch_repo_details(
+    client: &reqwest::Client,
+    owner: String,
+    repo: String,
+) -> AnyResult<GithubApiRepo> {
+    let variables = get_repository_query::Variables {
+        owner: owner.clone(),
+        repo: repo.clone(),
+    };
+
+    let pr_status = post_graphql::<GetRepositoryQuery>(client, variables).await?;
+
+    debug!("GitHub Response: {:?}", pr_status);
+
+    let response_data: get_repository_query::ResponseData = match pr_status.data {
+        Some(data) => data,
+        None => bail!(GitHubError::GraphQlError {
+            error: format!("{:?}", pr_status.errors)
+        }),
+    };
+
+    let gh_repository = match response_data.repository {
+        Some(r) => r,
+        None => bail!(GitHubError::NoSuchRepository {
+            owner: owner.clone(),
+            repo: repo.clone()
+        }),
+    };
+
+    let repo_id = gh_repository.id;
+    debug!("Repo ID: {}", repo_id);
+
+    let default_branch = match gh_repository.default_branch_ref {
+        Some(r) => r,
+        None => bail!(GitHubError::NoDefaultBranch {
+            owner: owner.clone(),
+            repo: repo.clone()
+        }),
+    };
+
+    let target_branch_name = format!("{}{}", default_branch.prefix, default_branch.name);
+    debug!("Target Branch: {}", target_branch_name);
+
+    Ok(GithubApiRepo {
+        id: repo_id,
+        target_branch: target_branch_name,
+        prefix: default_branch.prefix,
+    })
 }
 
 pub async fn update_pull_request(
     github_token: &str,
-    pr_number: u64,
+    pr_number: i64,
     create_pr: CreatePullRequest<'_>,
-) -> Result<u64, GitHubError> {
-    let github = Github::new(
-        format!("clu/{}", env!("CARGO_PKG_VERSION")),
-        Credentials::Token(github_token.to_owned()),
-    )?;
+) -> AnyResult<PullReqeustOutput> {
+    let client = Client::builder()
+        .user_agent(format!("clu/{}", env!("CARGO_PKG_VERSION")))
+        .default_headers(
+            std::iter::once((
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", github_token))
+                    .unwrap(),
+            ))
+            .collect(),
+        )
+        .build()?;
 
-    let repo = github.repo(create_pr.repo.owner.clone(), create_pr.repo.repo.clone());
-    info!("Getting repo details for {}", &create_pr.repo);
+    let gh_pull = fetch_pr_details(
+        &client,
+        create_pr.repo.owner.clone(),
+        create_pr.repo.repo.clone(),
+        pr_number,
+    )
+    .await?;
+    let pull_id = gh_pull.id;
+    let is_open = gh_pull.state == get_pull_request_status_query::PullRequestState::OPEN;
 
-    let pulls = repo.pulls();
-
-    let existing_pr = pulls.get(pr_number);
-    let actual_pr = existing_pr.get().await?;
-
-    if actual_pr.state != "open" {
-        info!("PR ({}) was not open, making a new one", actual_pr.url);
+    if !is_open {
+        info!("PR ({}) was not open, making a new one", gh_pull.permalink);
         return create_pull_request(github_token, create_pr).await;
     }
+
+    let variables = update_pull_request_mutation::Variables {
+        pull_request_id: pull_id,
+        body: create_pr.body.to_owned(),
+        title: create_pr.title.to_owned(),
+    };
+
     info!("Updating PR for {}", &create_pr.repo);
-    let updated_pr = existing_pr
-        .edit(
-            &PullEditOptions::builder()
-                .title(create_pr.title)
-                .body(create_pr.body)
-                .build(),
-        )
-        .await?;
 
-    info!("Updated PR {}", updated_pr.html_url);
+    let updated_pr = post_graphql::<UpdatePullRequestMutation>(&client, variables).await?;
 
-    Ok(updated_pr.number)
+    debug!("GitHub Response: {:?}", updated_pr);
+
+    let response_data: update_pull_request_mutation::ResponseData = match updated_pr.data {
+        Some(data) => data,
+        None => bail!(GitHubError::GraphQlError {
+            error: format!("{:?}", updated_pr.errors)
+        }),
+    };
+
+    let pr = match response_data
+        .update_pull_request
+        .map(|it| it.pull_request)
+        .flatten()
+    {
+        Some(pr) => pr,
+        None => bail!(GitHubError::UnableToCreatePullRequest),
+    };
+
+    info!("Updated PR {}", pr.permalink);
+
+    Ok(PullReqeustOutput {
+        number: pr.number,
+        permalink: pr.permalink,
+    })
 }

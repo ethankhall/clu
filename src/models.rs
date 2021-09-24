@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "kebab-case")]
@@ -52,7 +51,7 @@ pub struct PrCreationDetails {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct MigrationInput {
+pub struct MigrationFile {
     pub targets: BTreeMap<String, TargetDescription>,
     #[serde(flatten)]
     pub definition: MigrationDefinition,
@@ -63,7 +62,8 @@ pub struct MigrationInput {
 pub struct TargetDescription {
     pub repo: String,
     pub env: Option<BTreeMap<String, String>>,
-    pub migration_status: Option<MigrationStatus>,
+    #[serde(default)]
+    pub pull_request: Option<CreatedPullRequest>,
 }
 
 impl TargetDescription {
@@ -71,47 +71,14 @@ impl TargetDescription {
         Self {
             repo: repo.to_owned(),
             env: None,
-            migration_status: None,
+            pull_request: None,
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type")]
-#[serde(rename_all = "kebab-case")]
-pub enum MigrationStatus {
-    Other { message: String },
-    PreFlightFailed,
-    MigrationStepFailed { step_name: String },
-    PullRequestSkipped,
-    WorkingDirNotClean { files: Vec<String> },
-    PullRequestCreated(PullRequest),
-}
-
-#[derive(Debug, Clone)]
-pub struct MigrationTask {
-    pub pretty_name: String,
-    pub repo: String,
-    pub definition: MigrationDefinition,
-    pub work_dir: PathBuf,
-    pub github_token: String,
-    pub env: BTreeMap<String, String>,
-    pub dry_run: bool,
-    pub migration_status: Option<MigrationStatus>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PullRequest {
-    pub owner: String,
-    pub repo: String,
-    pub pr_number: u64,
-}
-
-impl PullRequest {
-    pub fn to_url(&self) -> String {
-        format!(
-            "https://github.com/{}/{}/pull/{}",
-            self.owner, self.repo, self.pr_number
-        )
-    }
+pub struct CreatedPullRequest {
+    pub pr_number: i64,
+    #[serde(default)]
+    pub url: String,
 }
