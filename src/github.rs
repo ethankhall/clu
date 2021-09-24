@@ -1,4 +1,3 @@
-use crate::models::CreatedPullRequest;
 use anyhow::{bail, Result as AnyResult};
 use regex::Regex;
 use std::fmt;
@@ -64,6 +63,12 @@ impl GitHubRepo {
     }
 }
 
+#[derive(Debug)]
+pub struct PullReqeustOutput {
+    pub number: i64,
+    pub permalink: String,
+}
+
 impl fmt::Display for GitHubRepo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}/{}", self.owner, self.repo)
@@ -99,6 +104,11 @@ pub async fn post_graphql<Q: GraphQLQuery>(
     Ok(reqwest_response.json().await?)
 }
 
+pub struct PullState {
+    pub status: PullStatus,
+    pub permalink: String,
+}
+
 pub enum PullStatus {
     ChecksFailed,
     NeedsApproval,
@@ -106,7 +116,7 @@ pub enum PullStatus {
     Merged,
 }
 
-pub async fn fetch_pull_status(github_token: &str, pull: &CreatedPullRequest) -> AnyResult<PullStatus> {
+pub async fn fetch_pull_state(github_token: &str, repo: &GitHubRepo, pr_number: i64) -> AnyResult<PullState> {
     let client = Client::builder()
         .user_agent(format!("clu/{}", env!("CARGO_PKG_VERSION")))
         .default_headers(
@@ -119,14 +129,14 @@ pub async fn fetch_pull_status(github_token: &str, pull: &CreatedPullRequest) ->
         )
         .build()?;
 
-    let gh_pull = fetch_pr_details(&client, pull.owner.clone(), pull.repo.clone(), pull.pr_number).await?;
+    let gh_pull = fetch_pr_details(&client, repo.owner.clone(), repo.repo.clone(), pr_number).await?;
 
     if gh_pull.merged {
-        return Ok(PullStatus::Merged);
+        return Ok(PullState { permalink: gh_pull.permalink, status: PullStatus::Merged });
     }
 
     if gh_pull.mergeable == get_pull_request_status_query::MergeableState::MERGEABLE {
-        return Ok(PullStatus::Mergeable);
+        return Ok(PullState { permalink: gh_pull.permalink, status: PullStatus::Mergeable });
     }
 
     let gh_nodes = gh_pull.commits.nodes.unwrap_or_default();
@@ -134,20 +144,20 @@ pub async fn fetch_pull_status(github_token: &str, pull: &CreatedPullRequest) ->
         Some(commit) => {
             match commit {
                 Some(commit) => commit,
-                None => { return Ok(PullStatus::ChecksFailed) } 
+                None => { return Ok(PullState { permalink: gh_pull.permalink, status: PullStatus::ChecksFailed }) } 
             }
         },
-        None => { return Ok(PullStatus::ChecksFailed) } 
+        None => { return Ok(PullState { permalink: gh_pull.permalink, status: PullStatus::ChecksFailed }) } 
     };
 
     match &gh_commit.commit.status_check_rollup {
         Some(check) => {
             match check.state {
-                get_pull_request_status_query::StatusState::SUCCESS | get_pull_request_status_query::StatusState::PENDING => Ok(PullStatus::Mergeable),
-                _ => Ok(PullStatus::ChecksFailed)
+                get_pull_request_status_query::StatusState::SUCCESS | get_pull_request_status_query::StatusState::PENDING => Ok(PullState { permalink: gh_pull.permalink, status: PullStatus::Mergeable }),
+                _ => Ok(PullState { permalink: gh_pull.permalink, status: PullStatus::ChecksFailed })
             }
         },
-        None => { return Ok(PullStatus::ChecksFailed) } 
+        None => { return Ok(PullState { permalink: gh_pull.permalink, status: PullStatus::ChecksFailed }) } 
     }
 }
 
@@ -188,7 +198,7 @@ fn validate_extract_github_info() {
 pub async fn create_pull_request(
     github_token: &str,
     create_pr: CreatePullRequest<'_>,
-) -> Result<i64, anyhow::Error> {
+) -> Result<PullReqeustOutput, anyhow::Error> {
 
     let client = Client::builder()
         .user_agent(format!("clu/{}", env!("CARGO_PKG_VERSION")))
@@ -228,7 +238,10 @@ pub async fn create_pull_request(
 
     info!("Create PR at {}", pr.permalink);
 
-    Ok(pr.number)
+    Ok(PullReqeustOutput {
+        number: pr.number,
+        permalink: pr.permalink
+    })
 }
 
 async fn fetch_pr_details(client: &reqwest::Client, owner: String, repo: String, pr_number: i64) -> AnyResult<get_pull_request_status_query::GetPullRequestStatusQueryRepositoryPullRequest> {
@@ -308,7 +321,7 @@ pub async fn update_pull_request(
     github_token: &str,
     pr_number: i64,
     create_pr: CreatePullRequest<'_>,
-) -> AnyResult<i64> {
+) -> AnyResult<PullReqeustOutput> {
 
     let client = Client::builder()
         .user_agent(format!("clu/{}", env!("CARGO_PKG_VERSION")))
@@ -348,12 +361,15 @@ pub async fn update_pull_request(
         None => bail!(GitHubError::GraphQlError{error: format!("{:?}", updated_pr.errors)})
     };
 
-    match response_data.update_pull_request.map(|it| it.pull_request).flatten().map(|it| it.permalink) {
-        Some(link) => {
-            info!("Updated PR {}", link)
-        },
+    let pr = match response_data.update_pull_request.map(|it| it.pull_request).flatten() {
+        Some(pr) => pr,
         None => bail!(GitHubError::UnableToCreatePullRequest)
     };
 
-    Ok(pr_number)
+    info!("Updated PR {}", pr.permalink);
+
+    Ok(PullReqeustOutput {
+        number: pr.number,
+        permalink: pr.permalink
+    })
 }

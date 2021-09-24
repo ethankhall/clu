@@ -78,16 +78,8 @@ impl TargetDescription {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CreatedPullRequest {
-    pub owner: String,
-    pub repo: String,
     pub pr_number: i64,
+    #[serde(default)]
+    pub url: String,
 }
 
-impl CreatedPullRequest {
-    pub fn to_url(&self) -> String {
-        format!(
-            "https://github.com/{}/{}/pull/{}",
-            self.owner, self.repo, self.pr_number
-        )
-    }
-}

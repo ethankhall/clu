@@ -109,7 +109,7 @@ async fn prepair_pr(
         .run_command_successfully("git push --force-with-lease")
         .await?;
 
-    let pr_number = if let Some(pr) = &task.pull_request {
+    let pr_output = if let Some(pr) = &task.pull_request {
         update_pull_request(
             &task.github_token,
             pr.pr_number,
@@ -135,9 +135,8 @@ async fn prepair_pr(
     };
 
     Ok(CreatedPullRequest {
-        owner: github_repo.owner.clone(),
-        repo: github_repo.repo.clone(),
-        pr_number,
+        pr_number: pr_output.number,
+        url: pr_output.permalink
     })
 }
 

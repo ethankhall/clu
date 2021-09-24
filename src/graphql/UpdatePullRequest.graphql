@@ -3,6 +3,7 @@ mutation UpdatePullRequestMutation($pullRequestId: ID!, $title: String!, $body: 
     pullRequest {
       id
       permalink
+      number
     }
   }
 }

@@ -145,13 +145,15 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
             _ => continue,
         };
 
-        let status = clu::github::fetch_pull_status(&args.github_token, &pull).await?;
+        let github_repo = clu::github::extract_github_info(&target.repo)?;
 
-        match status {
-            PullStatus::ChecksFailed => checks_failed.push(format!("- {}", pull.to_url())),
-            PullStatus::NeedsApproval => not_approved.push(format!("- {}", pull.to_url())),
-            PullStatus::Mergeable => mergeable.push(format!("- {}", pull.to_url())),
-            PullStatus::Merged => mergeable.push(format!("- {}", pull.to_url())),
+        let state = clu::github::fetch_pull_state(&args.github_token, &github_repo, pull.pr_number).await?;
+
+        match state.status {
+            PullStatus::ChecksFailed => checks_failed.push(format!("- {}", state.permalink)),
+            PullStatus::NeedsApproval => not_approved.push(format!("- {}", state.permalink)),
+            PullStatus::Mergeable => mergeable.push(format!("- {}", state.permalink)),
+            PullStatus::Merged => mergeable.push(format!("- {}", state.permalink)),
         }
     }
 
