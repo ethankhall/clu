@@ -18,7 +18,8 @@ anyhow = "1.0"
 git2 = "0.13.17"
 async-process = "1.0"
 futures = "0.3"
-# Upgrade to Tokio
-hubcaps = { git = "https://github.com/softprops/hubcaps", rev = "a9e6616ecc7b8eef0ea0eaf6055d9610c8961500" }
 regex = "1.4"
 toml = "0.5"
+graphql_client = { version = "0.10" }
+reqwest = { version = "0.11", features = ["json"] }
+sqlx = { version = "0.5", features = [ "sqlite", "time", "runtime-tokio-native-tls", "chrono" ] }

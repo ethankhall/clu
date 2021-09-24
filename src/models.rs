@@ -63,7 +63,7 @@ pub struct MigrationInput {
 pub struct TargetDescription {
     pub repo: String,
     pub env: Option<BTreeMap<String, String>>,
-    pub migration_status: Option<MigrationStatus>,
+    pub pull_request: Option<CreatedPullRequest>,
 }
 
 impl TargetDescription {
@@ -71,21 +71,9 @@ impl TargetDescription {
         Self {
             repo: repo.to_owned(),
             env: None,
-            migration_status: None,
+            pull_request: None,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type")]
-#[serde(rename_all = "kebab-case")]
-pub enum MigrationStatus {
-    Other { message: String },
-    PreFlightFailed,
-    MigrationStepFailed { step_name: String },
-    PullRequestSkipped,
-    WorkingDirNotClean { files: Vec<String> },
-    PullRequestCreated(PullRequest),
 }
 
 #[derive(Debug, Clone)]
@@ -97,17 +85,17 @@ pub struct MigrationTask {
     pub github_token: String,
     pub env: BTreeMap<String, String>,
     pub dry_run: bool,
-    pub migration_status: Option<MigrationStatus>,
+    pub pull_request: Option<CreatedPullRequest>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PullRequest {
+pub struct CreatedPullRequest {
     pub owner: String,
     pub repo: String,
-    pub pr_number: u64,
+    pub pr_number: i64,
 }
 
-impl PullRequest {
+impl CreatedPullRequest {
     pub fn to_url(&self) -> String {
         format!(
             "https://github.com/{}/{}/pull/{}",

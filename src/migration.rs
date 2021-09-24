@@ -6,7 +6,7 @@ use thiserror::Error;
 use tracing::{info, instrument};
 
 use crate::github::{create_pull_request, update_pull_request, CreatePullRequest, GitHubRepo};
-use crate::models::{MigrationStatus, MigrationTask, PullRequest};
+use crate::models::{MigrationTask, CreatedPullRequest};
 use crate::workspace::Workspace;
 
 #[derive(Error, Debug)]
@@ -33,28 +33,13 @@ pub enum MigrationError {
     AnyHowError(#[from] anyhow::Error),
 }
 
+#[derive(Debug)]
 pub enum ExpectedResults {
     DryRun,
     PreFlightCheckFailed,
     WorkingDirNotClean { files: Vec<String> },
     MigrationFailed { step: String },
-    PullRequest(PullRequest),
-}
-
-impl From<ExpectedResults> for MigrationStatus {
-    fn from(result: ExpectedResults) -> MigrationStatus {
-        match result {
-            ExpectedResults::DryRun => MigrationStatus::PullRequestSkipped,
-            ExpectedResults::PreFlightCheckFailed => MigrationStatus::PreFlightFailed,
-            ExpectedResults::WorkingDirNotClean { files } => {
-                MigrationStatus::WorkingDirNotClean { files }
-            }
-            ExpectedResults::MigrationFailed { step } => {
-                MigrationStatus::MigrationStepFailed { step_name: step }
-            }
-            ExpectedResults::PullRequest(pr) => MigrationStatus::PullRequestCreated(pr),
-        }
-    }
+    PullRequest(CreatedPullRequest),
 }
 
 enum ThisResult {
@@ -63,7 +48,7 @@ enum ThisResult {
 }
 
 #[instrument(name = "migrate", skip(task), fields(name = %task.pretty_name))]
-pub async fn run_migration(task: &MigrationTask) -> Result<ExpectedResults, MigrationError> {
+pub async fn run_migration_task(task: &MigrationTask) -> Result<ExpectedResults, MigrationError> {
     let work_dir = task.work_dir.canonicalize()?;
 
     info!("Processing {} in {:?}", task.pretty_name, work_dir);
@@ -104,14 +89,14 @@ async fn prepair_pr(
     github_repo: &GitHubRepo,
     task: &MigrationTask,
     workspace: &mut Workspace,
-) -> AnyResult<PullRequest> {
+) -> AnyResult<CreatedPullRequest> {
     let definition = &task.definition;
 
     workspace
         .run_command_successfully("git push --force-with-lease")
         .await?;
 
-    let pr_number = if let Some(MigrationStatus::PullRequestCreated(pr)) = &task.migration_status {
+    let pr_number = if let Some(pr) = &task.pull_request {
         update_pull_request(
             &task.github_token,
             pr.pr_number,
@@ -136,7 +121,7 @@ async fn prepair_pr(
         .await?
     };
 
-    Ok(PullRequest {
+    Ok(CreatedPullRequest {
         owner: github_repo.owner.clone(),
         repo: github_repo.repo.clone(),
         pr_number,

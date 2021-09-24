@@ -8,6 +8,7 @@ use std::time::SystemTime;
 use anyhow::Result as AnyResult;
 use tracing::{debug, info, warn};
 
+use clu::migration::ExpectedResults;
 use clu::models::*;
 
 /// Clu is a migration tool, intended to make cross company migrations easier
@@ -92,6 +93,11 @@ pub struct LoggingOpts {
     pub error: bool,
 }
 
+enum MigrationResult {
+    PullRequest(CreatedPullRequest),
+    Error(String)
+}
+
 impl LoggingOpts {
     pub fn to_level(&self) -> tracing::Level {
         use tracing::Level;
@@ -134,8 +140,8 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
 
     let results: MigrationInput = toml::from_str(&read_to_string(args.migration_definition)?)?;
     for (_name, target) in results.targets {
-        let pull = match target.migration_status {
-            Some(MigrationStatus::PullRequestCreated(pull)) => pull,
+        let pull = match target.pull_request {
+            Some(pull) => pull,
             _ => continue,
         };
 
@@ -262,9 +268,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     stream::iter(tasks)
         .for_each_concurrent(3, |(result_map, task)| async move {
             let status = match run_single_migration(&task).await {
-                Err(e) => MigrationStatus::Other {
-                    message: e.to_string(),
-                },
+                Err(e) => MigrationResult::Error(e.to_string()),
                 Ok(status) => status,
             };
             let mut result_map = result_map.lock().unwrap();
@@ -275,11 +279,19 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     let result_map = result_map.lock().unwrap();
     for (pretty_name, status) in result_map.iter() {
         let status = status.clone();
-        migration_input
-            .targets
-            .get_mut(pretty_name)
-            .unwrap()
-            .migration_status = Some(status);
+
+        match status {
+            MigrationResult::PullRequest(pr) => {
+                migration_input
+                    .targets
+                    .get_mut(pretty_name)
+                    .unwrap()
+                    .pull_request = Some(pr.clone())
+            },
+            MigrationResult::Error(e) => {
+                warn!("Unable to run migration because of {}", e);
+            }
+        }
     }
 
     let updated_migration_input = &toml::to_string_pretty(&migration_input)?;
@@ -313,28 +325,27 @@ async fn prepair_migration(
         env,
         github_token: github_token.to_owned(),
         dry_run: skip_pull_request,
-        migration_status: target.migration_status.clone(),
+        pull_request: target.pull_request.clone(),
     })
 }
 
-async fn run_single_migration(input: &MigrationTask) -> anyhow::Result<MigrationStatus> {
+async fn run_single_migration(input: &MigrationTask) -> anyhow::Result<MigrationResult> {
     debug!("Processing {:?}", &input.pretty_name);
     if input.work_dir.exists() {
         remove_dir_all(&input.work_dir)?;
     }
     create_dir_all(&input.work_dir)?;
 
-    match clu::migration::run_migration(input).await {
-        Ok(pull) => Ok(pull.into()),
+    match clu::migration::run_migration_task(input).await {
+        Ok(ExpectedResults::PullRequest(pull)) => Ok(MigrationResult::PullRequest(pull)),
+        Ok(other) => Ok(MigrationResult::Error(format!("{:?}", other))),
         Err(e) => {
             warn!(
                 "There was a problem migration {}. Err: {:?}",
                 &input.pretty_name, e
             );
 
-            Ok(MigrationStatus::Other {
-                message: e.to_string(),
-            })
+            Ok(MigrationResult::Error(e.to_string()))
         }
     }
 }

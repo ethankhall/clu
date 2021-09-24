@@ -1,0 +1,19 @@
+query GetRepositoryQuery($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+    id
+    defaultBranchRef {
+      prefix
+      name
+    }
+  }
+}
+
+mutation CreatePullRequestMigration($repositoryId: ID!, $baseRef: String!, $headRef: String!, $title: String!, $body: String!) {
+  createPullRequest(input: {repositoryId: $repositoryId, baseRefName: $baseRef, headRefName: $headRef, title: $title, body: $body} ) {
+    pullRequest {
+      number
+      permalink
+    }
+  }
+}
+
