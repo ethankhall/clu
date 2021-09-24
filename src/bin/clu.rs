@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use anyhow::Result as AnyResult;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, error, warn};
 
 use clu::migration::{ExpectedResults, MigrationTask};
 use clu::models::*;
@@ -233,12 +233,12 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     let mut migration_input: MigrationFile =
         toml::from_str(&read_to_string(&args.migration_definition)?)?;
 
-    let seconds = SystemTime::now()
+    let epoch_start = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)?
         .as_secs();
     std::fs::copy(
         &args.migration_definition,
-        format!("{}.{}.bck", &args.migration_definition, seconds),
+        format!("{}.{}.bck", &args.migration_definition, epoch_start),
     )?;
 
     debug!("targets: {:?}", &migration_input.targets);
@@ -278,6 +278,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
         })
         .await;
 
+    let mut error_log = Vec::default();
     let result_map = result_map.lock().unwrap();
     for (pretty_name, status) in result_map.iter() {
         let status = status.clone();
@@ -291,7 +292,8 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
                     .pull_request = Some(pr.clone())
             },
             MigrationResult::Error(e) => {
-                warn!("Unable to run migration because of {}", e);
+                warn!("{}: Unable to run migration because of {}", pretty_name, e);
+                error_log.push(format!("{}: Unable to run migration because of {}", pretty_name, e));
             }
         }
     }
@@ -299,6 +301,12 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     let updated_migration_input = &toml::to_string_pretty(&migration_input)?;
     let mut results = File::create(args.migration_definition)?;
     results.write_all(updated_migration_input.as_bytes())?;
+
+    if !error_log.is_empty() {
+        let mut error_results = File::create("migration.errors.txt")?;
+        error_results.write_all(error_log.join("\n").as_bytes())?;
+        error!("Created migration.errors.txt with the summary of errors");
+    }
 
     Ok(())
 }

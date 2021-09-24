@@ -5,3 +5,4 @@ work-dir
 results.toml*
 migration.toml*
 !examples/migration.toml
+migration.errors.txt
