@@ -154,7 +154,7 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
             PullStatus::ChecksFailed => checks_failed.push(format!("- {}", state.permalink)),
             PullStatus::NeedsApproval => not_approved.push(format!("- {}", state.permalink)),
             PullStatus::Mergeable => mergeable.push(format!("- {}", state.permalink)),
-            PullStatus::Merged => mergeable.push(format!("- {}", state.permalink)),
+            PullStatus::Merged => merged.push(format!("- {}", state.permalink)),
         }
     }
 
