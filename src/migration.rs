@@ -11,6 +11,23 @@ use crate::models::{CreatedPullRequest, MigrationDefinition};
 use crate::workspace::Workspace;
 
 #[derive(Debug, Clone)]
+pub struct ExecutionOptions {
+    pub skip_pull_request: bool,
+    pub skip_push: bool,
+    pub dry_run: bool,
+}
+
+impl ExecutionOptions {
+    fn is_push_enabled(&self) -> bool {
+        !self.dry_run && !self.skip_push
+    }
+
+    fn is_pr_enabled(&self) -> bool {
+        !self.dry_run && !self.skip_pull_request
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MigrationTask {
     pub pretty_name: String,
     pub repo: String,
@@ -18,7 +35,7 @@ pub struct MigrationTask {
     pub work_dir: PathBuf,
     pub github_token: String,
     pub env: BTreeMap<String, String>,
-    pub dry_run: bool,
+    pub execution_opts: ExecutionOptions,
     pub pull_request: Option<CreatedPullRequest>,
 }
 
@@ -88,7 +105,7 @@ pub async fn run_migration_task(task: &MigrationTask) -> Result<ExpectedResults,
         ThisResult::ExpectedError(r) => return Ok(r),
     }
 
-    if !task.dry_run {
+    if !task.execution_opts.dry_run {
         match prepair_pr(&github_repo, task, &mut workspace).await {
             Err(e) => Err(MigrationError::UnableToCreatePullRequest { source: e }),
             Ok(pr) => Ok(ExpectedResults::PullRequest(pr)),
@@ -105,9 +122,11 @@ async fn prepair_pr(
 ) -> AnyResult<CreatedPullRequest> {
     let definition = &task.definition;
 
-    workspace
-        .run_command_successfully("git push --force-with-lease")
-        .await?;
+    if task.execution_opts.is_push_enabled() {
+        workspace
+            .run_command_successfully("git push --force-with-lease")
+            .await?;
+    }
 
     let pr_output = if let Some(pr) = &task.pull_request {
         update_pull_request(
@@ -121,7 +140,7 @@ async fn prepair_pr(
             },
         )
         .await?
-    } else {
+    } else if task.execution_opts.is_pr_enabled() {
         create_pull_request(
             &task.github_token,
             CreatePullRequest {
@@ -132,6 +151,8 @@ async fn prepair_pr(
             },
         )
         .await?
+    } else {
+        anyhow::bail!(ExpectedResults::DryRun);
     };
 
     Ok(CreatedPullRequest {

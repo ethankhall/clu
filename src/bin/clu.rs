@@ -8,7 +8,7 @@ use std::time::SystemTime;
 use anyhow::Result as AnyResult;
 use tracing::{debug, error, info, warn};
 
-use clu::migration::{ExpectedResults, MigrationTask};
+use clu::migration::{ExpectedResults, MigrationTask, ExecutionOptions};
 use clu::models::*;
 
 /// Clu is a migration tool, intended to make cross company migrations easier
@@ -72,9 +72,36 @@ pub struct RunMigrationArgs {
     #[clap(long, env = "GITHUB_TOKEN")]
     pub github_token: String,
 
-    /// When set, the PR will not be created
-    #[clap(long)]
+    #[clap(flatten)]
+    pub dry_run_opts: DryRunOpts,
+}
+
+#[derive(Clap, Debug)]
+#[clap(group = ArgGroup::new("dry-run"))]
+pub struct DryRunOpts {
+    /// When set, the PR will not be created. The change will still be pushed to the
+    /// upstream repo.
+    #[clap(long, group = "dry-run")]
     pub skip_pull_request: bool,
+
+    /// When set, the git repo will not be updated. When set, an existing PR will be
+    /// updated (if applicable).
+    #[clap(long, group = "dry-run")]
+    pub skip_push: bool,
+
+    /// The remote will not be updated, the PR will not be updated. Local scripts will run.
+    #[clap(long, group = "dry-run")]
+    pub dry_run: bool,
+}
+
+impl From<&DryRunOpts> for ExecutionOptions {
+    fn from(input: &DryRunOpts) -> Self {
+        ExecutionOptions {
+            skip_pull_request: input.skip_pull_request,
+            skip_push: input.skip_push,
+            dry_run: input.dry_run
+        }
+    }
 }
 
 #[derive(Clap, Debug)]
@@ -259,7 +286,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
             prepair_migration(
                 &migration_input.definition,
                 &args.github_token,
-                args.skip_pull_request,
+                &args.dry_run_opts,
                 &work_directory_root,
                 pretty_name,
                 target,
@@ -318,7 +345,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
 async fn prepair_migration(
     definition: &MigrationDefinition,
     github_token: &str,
-    skip_pull_request: bool,
+    dry_run_opts: &DryRunOpts,
     work_directory_root: &str,
     pretty_name: &str,
     target: &TargetDescription,
@@ -338,7 +365,7 @@ async fn prepair_migration(
         work_dir: target_dir,
         env,
         github_token: github_token.to_owned(),
-        dry_run: skip_pull_request,
+        execution_opts: ExecutionOptions::from(dry_run_opts),
         pull_request: target.pull_request.clone(),
     })
 }
