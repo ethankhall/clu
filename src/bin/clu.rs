@@ -1,6 +1,6 @@
 use clap::{AppSettings, ArgGroup, Clap};
 use futures::stream::{self, StreamExt};
-use std::fs::{create_dir_all, read_to_string, remove_dir_all, File};
+use std::fs::{create_dir_all, read_to_string, File};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -8,7 +8,8 @@ use std::time::SystemTime;
 use anyhow::Result as AnyResult;
 use tracing::{debug, error, info, warn};
 
-use clu::migration::{ExpectedResults, MigrationTask, ExecutionOptions};
+use clu::github::GithubApiClient;
+use clu::migration::{ExecutionOptions, MigrationStatus, MigrationTask};
 use clu::models::*;
 
 /// Clu is a migration tool, intended to make cross company migrations easier
@@ -39,11 +40,28 @@ pub struct Opts {
 pub enum SubCommand {
     /// Build a default migration toml file
     Init,
-    /// Run a migration, and write the results back to the file
+    /// Run a migration, and write the results back to the file.
     RunMigration(RunMigrationArgs),
-    /// Check the status of a migration
+    /// Check the status of a migration.
     CheckStatus(CheckStatusArgs),
+    /// Runs a script against each open PR.
+    RunFollowup(RunFollowupArgs),
 }
+
+#[derive(Clap, Debug)]
+pub struct RunFollowupArgs {
+    /// A TOML file that defines the input needed to run a migration. This file will be updated
+    /// with the results of the run.
+    #[clap(long)]
+    pub migration_definition: String,
+
+    /// Token to be used when talking to GitHub
+    #[clap(long, env = "GITHUB_TOKEN")]
+    pub github_token: String,
+
+    pub followup_script: String
+}
+
 
 #[derive(Clap, Debug)]
 pub struct CheckStatusArgs {
@@ -77,31 +95,21 @@ pub struct RunMigrationArgs {
 }
 
 #[derive(Clap, Debug)]
-#[clap(group = ArgGroup::new("dry-run"))]
+#[clap(group = ArgGroup::new("publish-group"))]
 pub struct DryRunOpts {
     /// When set, the PR will not be created. The change will still be pushed to the
     /// upstream repo.
-    #[clap(long, group = "dry-run")]
+    #[clap(long, group = "publish-group")]
     pub skip_pull_request: bool,
 
     /// When set, the git repo will not be updated. When set, an existing PR will be
     /// updated (if applicable).
-    #[clap(long, group = "dry-run")]
+    #[clap(long, group = "publish-group")]
     pub skip_push: bool,
 
     /// The remote will not be updated, the PR will not be updated. Local scripts will run.
-    #[clap(long, group = "dry-run")]
+    #[clap(long, group = "publish-group")]
     pub dry_run: bool,
-}
-
-impl From<&DryRunOpts> for ExecutionOptions {
-    fn from(input: &DryRunOpts) -> Self {
-        ExecutionOptions {
-            skip_pull_request: input.skip_pull_request,
-            skip_push: input.skip_push,
-            dry_run: input.dry_run
-        }
-    }
 }
 
 #[derive(Clap, Debug)]
@@ -118,11 +126,6 @@ pub struct LoggingOpts {
     /// Disable everything but error logging
     #[clap(short, long, global(true), group = "logging")]
     pub error: bool,
-}
-
-enum MigrationResult {
-    PullRequest(CreatedPullRequest),
-    Error(String),
 }
 
 impl LoggingOpts {
@@ -154,6 +157,7 @@ async fn main() -> AnyResult<()> {
         SubCommand::Init => run_init().await,
         SubCommand::RunMigration(args) => run_migration(args).await,
         SubCommand::CheckStatus(args) => check_status(args).await,
+        SubCommand::RunFollowup(args) => {}
     }
 }
 
@@ -234,7 +238,7 @@ async fn run_init() -> AnyResult<()> {
             description: "This is a TOML file\n\nSo you can add newlines between the PR's"
                 .to_owned(),
         },
-        steps: vec![MigrationStep {
+        steps: vec![MigrationStepDefinition {
             name: "Example".to_owned(),
             migration_script: "examples/example-migration.sh".to_owned(),
         }],
@@ -277,6 +281,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     create_dir_all(&args.work_directory_root)?;
     let work_directory_root = args.work_directory_root;
 
+    let github_client = GithubApiClient::new(&args.github_token)?;
     let result_map = Arc::new(Mutex::new(BTreeMap::default()));
 
     let mut tasks = Vec::new();
@@ -285,7 +290,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
             result_map.clone(),
             prepair_migration(
                 &migration_input.definition,
-                &args.github_token,
+                &github_client,
                 &args.dry_run_opts,
                 &work_directory_root,
                 pretty_name,
@@ -297,12 +302,9 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
 
     stream::iter(tasks)
         .for_each_concurrent(3, |(result_map, task)| async move {
-            let status = match run_single_migration(&task).await {
-                Err(e) => MigrationResult::Error(e.to_string()),
-                Ok(status) => status,
-            };
+            let migration_status = task.run().await;
             let mut result_map = result_map.lock().unwrap();
-            result_map.insert(task.pretty_name, status);
+            result_map.insert(task.pretty_name, migration_status);
         })
         .await;
 
@@ -312,20 +314,37 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
         let status = &status;
 
         match status {
-            MigrationResult::PullRequest(pr) => {
-                migration_input
-                    .targets
-                    .get_mut(pretty_name)
-                    .unwrap()
-                    .pull_request = Some(pr.clone())
-            }
-            MigrationResult::Error(e) => {
-                warn!("{}: Unable to run migration because of {}", pretty_name, e);
-                error_log.push(format!(
-                    "{}: Unable to run migration because of {}",
-                    pretty_name, e
-                ));
-            }
+            MigrationStatus::PullRequest(result) => match &result.result {
+                Err(e) => {
+                    warn!("{}: Unable to run migration because of {}", pretty_name, e);
+                    error_log.push(format!(
+                        "{}: Unable to run migration because of {}",
+                        pretty_name, e
+                    ));
+                }
+                Ok(pr) => {
+                    migration_input
+                        .targets
+                        .get_mut(pretty_name)
+                        .unwrap()
+                        .pull_request = Some(pr.clone());
+                }
+            },
+            MigrationStatus::EmptyResponse(result) => match &result.result {
+                Err(e) => {
+                    warn!("{}: Unable to run migration because: {}", pretty_name, e);
+                    error_log.push(format!(
+                        "{}: Unable to run migration because: {}",
+                        pretty_name, e
+                    ));
+                }
+                Ok(_) => {
+                    info!(
+                        "{}: Exited successfully with step `{}`",
+                        pretty_name, result.name
+                    );
+                }
+            },
         }
     }
 
@@ -342,14 +361,15 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     Ok(())
 }
 
-async fn prepair_migration(
+#[allow(clippy::needless_lifetimes)]
+async fn prepair_migration<'a>(
     definition: &MigrationDefinition,
-    github_token: &str,
+    github_client: &'a GithubApiClient,
     dry_run_opts: &DryRunOpts,
     work_directory_root: &str,
     pretty_name: &str,
     target: &TargetDescription,
-) -> anyhow::Result<MigrationTask> {
+) -> anyhow::Result<MigrationTask<'a>> {
     debug!("Processing {:?}", &pretty_name);
     let target_dir = PathBuf::from(&work_directory_root).join(&pretty_name);
 
@@ -358,50 +378,40 @@ async fn prepair_migration(
         None => std::collections::BTreeMap::default(),
     };
 
-    Ok(MigrationTask {
-        pretty_name: pretty_name.to_owned(),
-        repo: target.repo.clone(),
-        definition: definition.clone(),
+    let exec_options = ExecutionOptions {
+        skip_pull_request: dry_run_opts.skip_pull_request,
+        skip_push: dry_run_opts.skip_push,
+        dry_run: dry_run_opts.dry_run,
         work_dir: target_dir,
         env,
-        github_token: github_token.to_owned(),
-        execution_opts: ExecutionOptions::from(dry_run_opts),
-        pull_request: target.pull_request.clone(),
-    })
-}
+        github_client,
+    };
 
-async fn run_single_migration(input: &MigrationTask) -> anyhow::Result<MigrationResult> {
-    debug!("Processing {:?}", &input.pretty_name);
-    if input.work_dir.exists() {
-        remove_dir_all(&input.work_dir)?;
-    }
-    create_dir_all(&input.work_dir)?;
+    let github_repo = match clu::github::extract_github_info(&target.repo) {
+        Ok(repo) => repo,
+        Err(e) => anyhow::bail!(clu::migration::MigrationError::InvalidGitRepo { source: e }),
+    };
 
-    match clu::migration::run_migration_task(input).await {
-        Ok(ExpectedResults::PullRequest(pull)) => Ok(MigrationResult::PullRequest(pull)),
-        Ok(other) => Ok(MigrationResult::Error(format!("{:?}", other))),
-        Err(e) => {
-            warn!(
-                "There was a problem migration {}. Err: {:?}",
-                &input.pretty_name, e
-            );
-
-            Ok(MigrationResult::Error(e.to_string()))
-        }
-    }
+    Ok(MigrationTask::new(
+        pretty_name,
+        github_repo,
+        definition.clone(),
+        exec_options,
+        target.pull_request.clone(),
+        target.skip,
+    ))
 }
 
 fn configure_logging(logging_opts: &LoggingOpts) {
-    use tracing_subscriber::{fmt::format::FmtSpan, FmtSubscriber};
+    use tracing_subscriber::FmtSubscriber;
 
     // a builder for `FmtSubscriber`.
     let subscriber = FmtSubscriber::builder()
         // all spans/events with a level higher than TRACE (e.g, debug, info, warn, etc.)
         // will be written to stdout.
         .with_max_level(logging_opts.to_level())
-        // Record an event when each span closes. This can be used to time our
-        // routes' durations!
-        .with_span_events(FmtSpan::CLOSE)
+        .with_target(false)
+        .pretty()
         // completes the builder.
         .finish();
 

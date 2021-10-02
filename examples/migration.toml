@@ -1,5 +1,6 @@
 [targets.dummy-repo]
 repo = 'git@github.com:ethankhall/dummy-repo.git'
+skip = false
 
 [targets.dummy-repo.pull-request]
 pr_number = 14

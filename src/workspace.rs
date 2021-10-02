@@ -1,5 +1,5 @@
 use async_process::Command;
-use std::fs::File;
+use std::fs::{create_dir_all, remove_dir_all, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -23,14 +23,26 @@ pub struct Workspace {
     stderr: File,
     pub root_dir: PathBuf,
     pub working_dir: PathBuf,
+    pub workspace_name: String,
 }
 
 impl Workspace {
-    pub fn new(workspace_dir: &Path) -> Result<Self, std::io::Error> {
+    pub fn new<S: Into<String>>(
+        workspace_name: S,
+        workspace_dir: &Path,
+    ) -> Result<Self, std::io::Error> {
+        let workspace_name = workspace_name.into();
+        debug!("Processing {:?}", workspace_name);
+        if workspace_dir.exists() {
+            remove_dir_all(&workspace_dir)?
+        }
+        create_dir_all(&workspace_dir)?;
+
         let stdout = File::create(workspace_dir.join("stdout.log"))?;
         let stderr = File::create(workspace_dir.join("stderr.log"))?;
 
         Ok(Workspace {
+            workspace_name,
             stdout,
             stderr,
             root_dir: workspace_dir.to_path_buf(),
