@@ -8,6 +8,7 @@ use std::time::SystemTime;
 use anyhow::Result as AnyResult;
 use tracing::{debug, error, info, warn};
 
+use clu::commands::*;
 use clu::github::GithubApiClient;
 use clu::migration::{ExecutionOptions, MigrationStatus, MigrationTask};
 use clu::models::*;
@@ -47,21 +48,6 @@ pub enum SubCommand {
     /// Runs a script against each open PR.
     RunFollowup(RunFollowupArgs),
 }
-
-#[derive(Clap, Debug)]
-pub struct RunFollowupArgs {
-    /// A TOML file that defines the input needed to run a migration. This file will be updated
-    /// with the results of the run.
-    #[clap(long)]
-    pub migration_definition: String,
-
-    /// Token to be used when talking to GitHub
-    #[clap(long, env = "GITHUB_TOKEN")]
-    pub github_token: String,
-
-    pub followup_script: String
-}
-
 
 #[derive(Clap, Debug)]
 pub struct CheckStatusArgs {
@@ -157,7 +143,7 @@ async fn main() -> AnyResult<()> {
         SubCommand::Init => run_init().await,
         SubCommand::RunMigration(args) => run_migration(args).await,
         SubCommand::CheckStatus(args) => check_status(args).await,
-        SubCommand::RunFollowup(args) => {}
+        SubCommand::RunFollowup(args) => run_followup(args).await,
     }
 }
 
@@ -170,6 +156,7 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
     let mut merged: Vec<String> = Vec::new();
 
     let results: MigrationFile = toml::from_str(&read_to_string(args.migration_definition)?)?;
+    let github_api = GithubApiClient::new(&args.github_token)?;
     for (_name, target) in results.targets {
         let pull = match target.pull_request {
             Some(pull) => pull,
@@ -178,8 +165,9 @@ async fn check_status(args: CheckStatusArgs) -> AnyResult<()> {
 
         let github_repo = clu::github::extract_github_info(&target.repo)?;
 
-        let state =
-            clu::github::fetch_pull_state(&args.github_token, &github_repo, pull.pr_number).await?;
+        let state = github_api
+            .fetch_pull_state(&github_repo, pull.pr_number)
+            .await?;
 
         match state.status {
             PullStatus::ChecksFailed => checks_failed.push(format!("- {}", state.permalink)),

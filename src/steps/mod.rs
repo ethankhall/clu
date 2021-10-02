@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use std::env::current_dir;
+use std::path::PathBuf;
 
 mod git;
 mod github;
@@ -10,7 +12,7 @@ use crate::workspace::Workspace;
 use git::RepoCheck;
 pub use git::{CloneRepoStep, PushRepoStep};
 pub use github::UpdateGithubStep;
-pub use script_exec::{MigrationScriptStep, PreFlightCheckStep};
+pub use script_exec::{FollowUpStep, MigrationScriptStep, PreFlightCheckStep};
 
 #[async_trait]
 pub trait MigrationStep<Output> {
@@ -58,4 +60,16 @@ impl MigrationStepResult<()> {
             did_execute: true,
         }
     }
+}
+
+fn make_script_absolute(path: &str) -> String {
+    let mut preflight_check = PathBuf::from(&path);
+    if !preflight_check.is_absolute() {
+        preflight_check = current_dir()
+            .expect("Unable to get current dir")
+            .join(preflight_check);
+    }
+
+    let preflight_check = preflight_check.to_str().unwrap();
+    preflight_check.to_owned()
 }

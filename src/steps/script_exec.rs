@@ -2,10 +2,7 @@ use anyhow::Result as AnyResult;
 use async_trait::async_trait;
 use tracing::{info, instrument, warn};
 
-use std::env::current_dir;
-use std::path::PathBuf;
-
-use super::{MigrationStep, MigrationStepResult, RepoCheck};
+use super::{make_script_absolute, MigrationStep, MigrationStepResult, RepoCheck};
 use crate::migration::{MigrationError, MigrationTask};
 use crate::models::MigrationStepDefinition;
 use crate::workspace::{CommandError, Workspace};
@@ -108,14 +105,37 @@ impl<'a> From<&'a MigrationStepDefinition> for MigrationScriptStep<'a> {
     }
 }
 
-fn make_script_absolute(path: &str) -> String {
-    let mut preflight_check = PathBuf::from(&path);
-    if !preflight_check.is_absolute() {
-        preflight_check = current_dir()
-            .expect("Unable to get current dir")
-            .join(preflight_check);
+pub struct FollowUpStep<'a> {
+    command: &'a str,
+}
+
+#[async_trait]
+impl<'a> MigrationStep<()> for FollowUpStep<'a> {
+    #[instrument(name = "follow-up", skip(self, workspace), fields(workspace_name = %workspace.workspace_name, command = %self.command))]
+    async fn execute_step(&self, workspace: &mut Workspace) -> MigrationStepResult<()> {
+        match self.run_preflight(workspace).await {
+            Ok(_) => MigrationStepResult::success("follow-up"),
+            Err(_) => MigrationStepResult::abort("follow-up"),
+        }
+    }
+}
+
+impl<'a> FollowUpStep<'a> {
+    async fn run_preflight(&self, workspace: &mut Workspace) -> AnyResult<()> {
+        info!("Running follow-up for {}", workspace.workspace_name);
+        if let Err(e) = workspace
+            .run_command_successfully(&make_script_absolute(self.command))
+            .await
+        {
+            warn!("Follow-up failed!");
+            anyhow::bail!(e);
+        }
+        info!("Follow-up ran successfully");
+
+        Ok(())
     }
 
-    let preflight_check = preflight_check.to_str().unwrap();
-    preflight_check.to_owned()
+    pub fn new(command: &'a str) -> Self {
+        Self { command }
+    }
 }

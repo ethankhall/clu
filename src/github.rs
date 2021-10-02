@@ -303,75 +303,12 @@ pub struct PullState {
     pub permalink: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PullStatus {
     ChecksFailed,
     NeedsApproval,
     Mergeable,
     Merged,
-}
-
-pub async fn fetch_pull_state(
-    github_token: &str,
-    repo: &GitHubRepo,
-    pr_number: i64,
-) -> AnyResult<PullState> {
-    let client = Client::builder()
-        .user_agent(format!("clu/{}", env!("CARGO_PKG_VERSION")))
-        .default_headers(
-            std::iter::once((
-                reqwest::header::AUTHORIZATION,
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", github_token))
-                    .unwrap(),
-            ))
-            .collect(),
-        )
-        .build()?;
-
-    let gh_pull =
-        fetch_pr_details(&client, repo.owner.clone(), repo.repo.clone(), pr_number).await?;
-
-    if gh_pull.merged {
-        return Ok(PullState {
-            permalink: gh_pull.permalink,
-            status: PullStatus::Merged,
-        });
-    }
-
-    if gh_pull.mergeable == get_pull_request_status_query::MergeableState::MERGEABLE {
-        return Ok(PullState {
-            permalink: gh_pull.permalink,
-            status: PullStatus::Mergeable,
-        });
-    }
-
-    let gh_nodes = gh_pull.commits.nodes.unwrap_or_default();
-    let gh_commit = match &gh_nodes.first() {
-        Some(Some(commit)) => commit,
-        _ => {
-            return Ok(PullState {
-                permalink: gh_pull.permalink,
-                status: PullStatus::ChecksFailed,
-            })
-        }
-    };
-
-    match &gh_commit.commit.status_check_rollup {
-        Some(check) => match check.state {
-            get_pull_request_status_query::StatusState::SUCCESS
-            | get_pull_request_status_query::StatusState::PENDING => Ok(PullState {
-                permalink: gh_pull.permalink,
-                status: PullStatus::Mergeable,
-            }),
-            _ => Ok(PullState {
-                permalink: gh_pull.permalink,
-                status: PullStatus::ChecksFailed,
-            }),
-        },
-        None => Ok(PullState {
-            permalink: gh_pull.permalink,
-            status: PullStatus::ChecksFailed,
-        }),
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

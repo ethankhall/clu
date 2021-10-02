@@ -100,7 +100,7 @@ impl<'a> MigrationTask<'a> {
             definition,
             exec_opts,
             pull_request,
-            skip
+            skip,
         }
     }
 
@@ -109,7 +109,7 @@ impl<'a> MigrationTask<'a> {
         if self.skip {
             return MigrationStatus::EmptyResponse(MigrationStepResult::abort("skip"));
         }
-        
+
         let work_dir = match self.exec_opts.work_dir.canonicalize() {
             Ok(dir) => dir,
             Err(e) => {
@@ -122,7 +122,7 @@ impl<'a> MigrationTask<'a> {
         };
 
         info!("Processing {} in {:?}", self.pretty_name, work_dir);
-        let mut workspace = match Workspace::new(&self.pretty_name, &work_dir) {
+        let mut workspace = match Workspace::new_clean_workspace(&self.pretty_name, &work_dir) {
             Ok(dir) => dir,
             Err(e) => {
                 error!("Unable to create workspace: {:?}", e);

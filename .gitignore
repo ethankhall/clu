@@ -2,6 +2,7 @@
 migration-definition.toml
 migration-targets.json
 work-dir
+follow-up-dir
 results.toml*
 migration.toml*
 !examples/migration.toml

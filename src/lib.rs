@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod github;
 pub mod migration;
 pub mod models;
