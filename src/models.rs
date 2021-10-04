@@ -8,7 +8,7 @@ pub struct MigrationDefinition {
 
     pub pr: PrCreationDetails,
 
-    pub steps: Vec<MigrationStep>,
+    pub steps: Vec<MigrationStepDefinition>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -27,7 +27,7 @@ pub struct RepoCheckout {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "kebab-case")]
-pub struct MigrationStep {
+pub struct MigrationStepDefinition {
     /// Name of the migration step, only used for reporting.
     pub name: String,
 
@@ -61,6 +61,8 @@ pub struct MigrationFile {
 #[serde(rename_all = "kebab-case")]
 pub struct TargetDescription {
     pub repo: String,
+    #[serde(default)]
+    pub skip: bool,
     pub env: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub pull_request: Option<CreatedPullRequest>,
@@ -70,6 +72,7 @@ impl TargetDescription {
     pub fn new(repo: &str) -> Self {
         Self {
             repo: repo.to_owned(),
+            skip: false,
             env: None,
             pull_request: None,
         }

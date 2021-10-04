@@ -1,5 +1,6 @@
 use async_process::Command;
-use std::fs::File;
+use std::collections::BTreeMap;
+use std::fs::{create_dir_all, remove_dir_all, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -21,21 +22,47 @@ pub enum CommandError {
 pub struct Workspace {
     stdout: File,
     stderr: File,
+    env_vars: BTreeMap<String, String>,
     pub root_dir: PathBuf,
     pub working_dir: PathBuf,
+    pub workspace_name: String,
 }
 
 impl Workspace {
-    pub fn new(workspace_dir: &Path) -> Result<Self, std::io::Error> {
+    pub fn new_clean_workspace<S: Into<String>>(
+        workspace_name: S,
+        workspace_dir: &Path,
+    ) -> Result<Self, std::io::Error> {
+        let workspace_name = workspace_name.into();
+        debug!("Processing {:?}", workspace_name);
+        if workspace_dir.exists() {
+            remove_dir_all(&workspace_dir)?
+        }
+        create_dir_all(&workspace_dir)?;
+
+        Self::new(workspace_name, workspace_dir)
+    }
+
+    pub fn new<S: Into<String>>(
+        workspace_name: S,
+        workspace_dir: &Path,
+    ) -> Result<Self, std::io::Error> {
         let stdout = File::create(workspace_dir.join("stdout.log"))?;
         let stderr = File::create(workspace_dir.join("stderr.log"))?;
 
         Ok(Workspace {
+            workspace_name: workspace_name.into(),
             stdout,
             stderr,
+            env_vars: BTreeMap::new(),
             root_dir: workspace_dir.to_path_buf(),
             working_dir: workspace_dir.to_path_buf(),
         })
+    }
+
+    pub fn set_env_vars(&mut self, envs: &mut BTreeMap<String, String>) {
+        self.env_vars.clear();
+        self.env_vars.append(envs);
     }
 
     pub async fn run_command(&mut self, args: &str) -> Result<Output, CommandError> {
@@ -45,9 +72,16 @@ impl Workspace {
         self.stdout.write_all(notification.as_bytes())?;
         self.stderr.write_all(notification.as_bytes())?;
 
+        let envs: Vec<(String, String)> = self
+            .env_vars
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
         let output = Command::new("/bin/sh")
             .arg("-c")
             .arg(args)
+            .envs(envs)
             .current_dir(&self.working_dir)
             .output()
             .await?;
