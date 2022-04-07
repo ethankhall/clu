@@ -1,6 +1,6 @@
 use anyhow::Result as AnyResult;
 use async_trait::async_trait;
-use git2::Repository;
+use git2::{Repository, StatusOptions};
 use tracing::{info, instrument};
 
 use super::{MigrationStep, MigrationStepResult};
@@ -113,7 +113,9 @@ impl RepoCheck {
         let git_repo = workspace.root_dir.join("repo");
 
         let repo = Repository::open(git_repo)?;
-        let status = repo.statuses(None)?;
+        let mut repo_status_options = StatusOptions::new();
+        repo_status_options.include_ignored(false);
+        let status = repo.statuses(Some(&mut repo_status_options))?;
         if !status.is_empty() {
             let files: Vec<String> = status
                 .iter()
