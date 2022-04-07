@@ -42,7 +42,7 @@ pub async fn run_followup(args: RunFollowupArgs) -> AnyResult<()> {
     let mut work_queue = Vec::new();
 
     for (name, target) in results.targets {
-        let target_dir = PathBuf::from(&args.work_directory_root).join(&name);
+        let target_dir = PathBuf::from(&args.work_directory_root);
 
         let pull = match target.pull_request {
             Some(pull) => pull,

@@ -30,17 +30,18 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new_clean_workspace<S: Into<String>>(
-        workspace_name: S,
-        workspace_dir: &Path,
+        repo_workspace_name: S,
+        root_workspace_dir: &Path,
     ) -> Result<Self, std::io::Error> {
-        let workspace_name = workspace_name.into();
-        debug!("Processing {:?}", workspace_name);
-        if workspace_dir.exists() {
-            remove_dir_all(&workspace_dir)?
+        let repo_workspace_name = repo_workspace_name.into();
+        let repo_workspace_dir = PathBuf::from(&root_workspace_dir).join(&repo_workspace_name);
+        debug!("Processing {:?}", repo_workspace_name);
+        if repo_workspace_dir.exists() {
+            remove_dir_all(&repo_workspace_dir)?
         }
-        create_dir_all(&workspace_dir)?;
+        create_dir_all(&repo_workspace_dir)?;
 
-        Self::new(workspace_name, workspace_dir)
+        Self::new(repo_workspace_name, &repo_workspace_dir)
     }
 
     pub fn new<S: Into<String>>(

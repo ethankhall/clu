@@ -276,7 +276,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
     for (pretty_name, target) in &migration_input.targets {
         tasks.push((
             result_map.clone(),
-            prepair_migration(
+            prepare_migration(
                 &migration_input.definition,
                 &github_client,
                 &args.dry_run_opts,
@@ -350,7 +350,7 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
 }
 
 #[allow(clippy::needless_lifetimes)]
-async fn prepair_migration<'a>(
+async fn prepare_migration<'a>(
     definition: &MigrationDefinition,
     github_client: &'a GithubApiClient,
     dry_run_opts: &DryRunOpts,
@@ -359,7 +359,7 @@ async fn prepair_migration<'a>(
     target: &TargetDescription,
 ) -> anyhow::Result<MigrationTask<'a>> {
     debug!("Processing {:?}", &pretty_name);
-    let target_dir = PathBuf::from(&work_directory_root).join(&pretty_name);
+    let work_dir = PathBuf::from(&work_directory_root);
 
     let env = match &target.env {
         Some(value) => value.clone(),
@@ -370,7 +370,7 @@ async fn prepair_migration<'a>(
         skip_pull_request: dry_run_opts.skip_pull_request,
         skip_push: dry_run_opts.skip_push,
         dry_run: dry_run_opts.dry_run,
-        work_dir: target_dir,
+        work_dir,
         env,
         github_client,
     };
