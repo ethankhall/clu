@@ -1,4 +1,4 @@
-use clap::Clap;
+use clap::Args;
 
 use std::collections::BTreeMap;
 use std::fs::read_to_string;
@@ -16,7 +16,7 @@ use crate::steps::FollowUpStep;
 use crate::steps::{MigrationStep, MigrationStepResult};
 use crate::workspace::Workspace;
 
-#[derive(Clap, Debug)]
+#[derive(Args, Debug)]
 pub struct RunFollowupArgs {
     /// A TOML file that defines the input needed to run a migration. This file will be updated
     /// with the results of the run.
