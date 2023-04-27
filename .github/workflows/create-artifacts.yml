@@ -1,0 +1,36 @@
+name: Publish Image
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+jobs:
+  build-for-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('.github/cache-version') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+             ${{ runner.os }}-cargo-release-${{ hashFiles('.github/cache-version') }}-
+      - name: Build Artifacts
+        run: |
+          .github/bin/build-all.sh ${{ inputs.version }}
+      - name: Upload Artifacts
+        env:
+          GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        run: |
+          tar -C target/artifacts -cvzf target/artifacts/clu-macos.tgz clu
+          gh release upload ${{ inputs.version }} target/artifacts/clu-macos.tgz

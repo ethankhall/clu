@@ -1,4 +1,4 @@
-use clap::{AppSettings, ArgGroup, Clap};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 use futures::stream::{self, StreamExt};
 use std::fs::{create_dir_all, read_to_string, File};
 use std::io::Write;
@@ -26,9 +26,8 @@ use clu::models::*;
 /// Checks the status of the PR's that were created.
 ///
 /// > clu check-status --results migration.toml
-#[derive(Clap, Debug)]
+#[derive(Parser, Debug)]
 #[clap(author, version)]
-#[clap(setting = AppSettings::ColoredHelp)]
 pub struct Opts {
     #[clap(flatten)]
     pub logging_opts: LoggingOpts,
@@ -37,7 +36,7 @@ pub struct Opts {
     pub sub_command: SubCommand,
 }
 
-#[derive(Clap, Debug)]
+#[derive(Subcommand, Debug)]
 pub enum SubCommand {
     /// Build a default migration toml file
     Init,
@@ -49,7 +48,7 @@ pub enum SubCommand {
     RunFollowup(RunFollowupArgs),
 }
 
-#[derive(Clap, Debug)]
+#[derive(Args, Debug)]
 pub struct CheckStatusArgs {
     /// A TOML file that defines the input needed to run a migration. This file will be updated
     /// with the results of the run.
@@ -61,7 +60,7 @@ pub struct CheckStatusArgs {
     pub github_token: String,
 }
 
-#[derive(Clap, Debug)]
+#[derive(Args, Debug)]
 pub struct RunMigrationArgs {
     /// A TOML file that defines the input needed to run a migration. This file will be updated
     /// with the results of the run.
@@ -80,7 +79,7 @@ pub struct RunMigrationArgs {
     pub dry_run_opts: DryRunOpts,
 }
 
-#[derive(Clap, Debug)]
+#[derive(Args, Debug)]
 #[clap(group = ArgGroup::new("publish-group"))]
 pub struct DryRunOpts {
     /// When set, the PR will not be created. The change will still be pushed to the
@@ -98,11 +97,11 @@ pub struct DryRunOpts {
     pub dry_run: bool,
 }
 
-#[derive(Clap, Debug)]
+#[derive(Args, Debug)]
 #[clap(group = ArgGroup::new("logging"))]
 pub struct LoggingOpts {
     /// A level of verbosity, and can be used multiple times
-    #[clap(short, long, parse(from_occurrences), global(true), group = "logging")]
+    #[clap(short, long, action = clap::ArgAction::Count, global(true), group = "logging")]
     pub debug: u64,
 
     /// Enable warn logging

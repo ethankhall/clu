@@ -222,8 +222,7 @@ impl GithubApiClient {
 
         let pr = match response_data
             .update_pull_request
-            .map(|it| it.pull_request)
-            .flatten()
+            .and_then(|it| it.pull_request)
         {
             Some(pr) => pr,
             None => bail!(GitHubError::UnableToCreatePullRequest),
@@ -267,8 +266,7 @@ impl GithubApiClient {
 
         let pr = match response_data
             .create_pull_request
-            .map(|it| it.pull_request)
-            .flatten()
+            .and_then(|it| it.pull_request)
         {
             Some(pr) => pr,
             None => bail!(GitHubError::UnableToCreatePullRequest),
@@ -295,7 +293,7 @@ pub async fn post_graphql<Q: GraphQLQuery>(
         .send()
         .await?;
 
-    Ok(reqwest_response.json().await?)
+    reqwest_response.json().await
 }
 
 pub struct PullState {
