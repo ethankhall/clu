@@ -25,13 +25,9 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('.github/cache-version') }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
              ${{ runner.os }}-cargo-release-${{ hashFiles('.github/cache-version') }}-
-      - name: Configure version and MacOs
-        run: |
-          brew install binutils just exa
-          echo "$(brew --prefix)/opt/binutils/bin" >> $GITHUB_PATH
       - name: Build Artifacts
         run: |
-          .github/bin/build-all.sh
+          .github/bin/build-all.sh ${{ inputs.version }}
       - name: Upload Artifacts
         run: |
           gh release upload ${{ inputs.version }} target/artifacts/clu
