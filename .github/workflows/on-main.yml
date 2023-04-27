@@ -19,7 +19,9 @@ jobs:
         env:
           GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
         run: |
-          VERSION="$(env TZ=UTC date +"1.%Y%m%d.$(git rev-list --count main --since "$(date +'%FT00:00:00-12:00')")")"
+          set -eux
+          set -o pipefail
+          VERSION="$(env TZ=UTC date +"1.%Y%m%d.$(git rev-list --count origin/main --since "$(date +'%FT00:00:00-12:00')")")"
           gh release create $VERSION --generate-notes --target $(git rev-parse HEAD) --draft
           echo "::set-output name=version::$VERSION"
 
