@@ -30,4 +30,5 @@ jobs:
           .github/bin/build-all.sh ${{ inputs.version }}
       - name: Upload Artifacts
         run: |
-          gh release upload ${{ inputs.version }} target/artifacts/clu
+          tar -C target/artifacts -cvzf clu-macos.tgz clu
+          gh release upload ${{ inputs.version }} target/artifacts/clu-macos.tgz
