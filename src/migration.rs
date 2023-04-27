@@ -161,11 +161,11 @@ impl<'a> MigrationTask<'a> {
             }
 
             if self.exec_opts.is_pr_enabled() {
-                return MigrationStatus::PullRequest(
+                MigrationStatus::PullRequest(
                     UpdateGithubStep::from(self)
                         .execute_step(&mut workspace)
                         .await,
-                );
+                )
             } else {
                 MigrationStatus::EmptyResponse(MigrationStepResult::abort("pull-request"))
             }

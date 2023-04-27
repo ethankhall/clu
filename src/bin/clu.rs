@@ -1,4 +1,4 @@
-use clap::{ArgGroup, Args, Subcommand, Parser};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 use futures::stream::{self, StreamExt};
 use std::fs::{create_dir_all, read_to_string, File};
 use std::io::Write;
