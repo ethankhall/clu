@@ -32,5 +32,5 @@ jobs:
         env:
           GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
         run: |
-          tar -C target/artifacts -cvzf clu-macos.tgz clu
+          tar -C target/artifacts -cvzf target/artifacts/clu-macos.tgz clu
           gh release upload ${{ inputs.version }} target/artifacts/clu-macos.tgz
