@@ -20,7 +20,7 @@ jobs:
           GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
         run: |
           set -eux
-          VERSION="$(env TZ=UTC date +"%Y.%m.%d.$(git rev-list --count main --since "$(date +'%FT00:00:00-12:00')")")"
+          VERSION="$(env TZ=UTC date +"1.%Y%m%d.$(git rev-list --count main --since "$(date +'%FT00:00:00-12:00')")")"
           echo "Creating release $VERSION"
           echo "::set-output name=version::$VERSION"
           gh release create $VERSION --generate-notes --prerelease --target ${{ github.event.pull_request.head.sha }} --draft
