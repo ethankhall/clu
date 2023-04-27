@@ -23,7 +23,7 @@ jobs:
           set -o pipefail
           VERSION="$(env TZ=UTC date +"1.%Y%m%d.0-$(git rev-parse --short HEAD)")"
           echo "Creating release $VERSION"
-          echo "::set-output name=version::$VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
           gh release create $VERSION --generate-notes --prerelease --target ${{ github.event.pull_request.head.sha }} --draft
 
   publish:

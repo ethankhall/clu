@@ -29,6 +29,8 @@ jobs:
         run: |
           .github/bin/build-all.sh ${{ inputs.version }}
       - name: Upload Artifacts
+        env:
+          GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
         run: |
           tar -C target/artifacts -cvzf clu-macos.tgz clu
           gh release upload ${{ inputs.version }} target/artifacts/clu-macos.tgz
