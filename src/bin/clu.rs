@@ -1,12 +1,22 @@
 use clap::{ArgGroup, Args, Parser, Subcommand};
 use futures::stream::{self, StreamExt};
+use indicatif::ProgressStyle;
 use std::fs::{create_dir_all, read_to_string, File};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::SystemTime;
+use tracing::level_filters::LevelFilter;
+use tracing_indicatif::filter::hide_indicatif_span_fields;
+use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing_indicatif::IndicatifLayer;
+use tracing_subscriber::fmt::format::{DefaultFields, PrettyFields};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{Layer, Registry};
+
+use tracing_subscriber::fmt::format::Format;
 
 use anyhow::Result as AnyResult;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, info_span, warn};
 
 use clu::commands::*;
 use clu::github::GithubApiClient;
@@ -102,7 +112,7 @@ pub struct DryRunOpts {
 pub struct LoggingOpts {
     /// A level of verbosity, and can be used multiple times
     #[clap(short, long, action = clap::ArgAction::Count, global(true), group = "logging")]
-    pub debug: u64,
+    pub debug: u8,
 
     /// Enable warn logging
     #[clap(short, long, global(true), group = "logging")]
@@ -114,19 +124,17 @@ pub struct LoggingOpts {
 }
 
 impl LoggingOpts {
-    pub fn to_level(&self) -> tracing::Level {
-        use tracing::Level;
-
+    pub fn to_level(&self) -> LevelFilter {
         if self.error {
-            Level::ERROR
+            LevelFilter::ERROR
         } else if self.warn {
-            Level::WARN
+            LevelFilter::WARN
         } else if self.debug == 0 {
-            Level::INFO
+            LevelFilter::INFO
         } else if self.debug == 1 {
-            Level::DEBUG
+            LevelFilter::DEBUG
         } else {
-            Level::TRACE
+            LevelFilter::TRACE
         }
     }
 }
@@ -287,11 +295,28 @@ pub async fn run_migration(args: RunMigrationArgs) -> AnyResult<()> {
         ));
     }
 
+    let header_span = info_span!("run", "indicatif.pb_show" = true);
+    header_span.pb_set_length(tasks.len() as u64);
+    header_span.pb_set_message("clu");
+
+    let _span = header_span.enter();
+
     stream::iter(tasks)
-        .for_each_concurrent(3, |(result_map, task)| async move {
-            let migration_status = task.run().await;
-            let mut result_map = result_map.lock().unwrap();
-            result_map.insert(task.pretty_name, migration_status);
+        .for_each_concurrent(3, |(result_map, task)| {
+            let header_span = &header_span;
+            async move {
+                header_span.pb_inc(1);
+
+                let action_span =
+                    info_span!(parent: header_span, "action", "indicatif.pb_show" = true);
+                action_span.pb_set_message(&format!("action {}", task.pretty_name,));
+                action_span.pb_set_style(&progress_bar_without_pos());
+                let _span = action_span.enter();
+
+                let migration_status = task.run().await;
+                let mut result_map = result_map.lock().unwrap();
+                result_map.insert(task.pretty_name, migration_status);
+            }
         })
         .await;
 
@@ -389,18 +414,39 @@ async fn prepare_migration<'a>(
     ))
 }
 
-fn configure_logging(logging_opts: &LoggingOpts) {
-    use tracing_subscriber::FmtSubscriber;
+fn default_progress_bar() -> ProgressStyle {
+    ProgressStyle::with_template(
+        "{span_child_prefix} {spinner:.green} {wide_msg} {pos:>7}/{len:7} [{elapsed_precise}]",
+    )
+    .unwrap()
+    .progress_chars("##-")
+}
 
-    // a builder for `FmtSubscriber`.
-    let subscriber = FmtSubscriber::builder()
-        // all spans/events with a level higher than TRACE (e.g, debug, info, warn, etc.)
-        // will be written to stdout.
-        .with_max_level(logging_opts.to_level())
-        .with_target(false)
-        .pretty()
-        // completes the builder.
-        .finish();
+pub fn progress_bar_without_pos() -> ProgressStyle {
+    ProgressStyle::with_template(
+        "{span_child_prefix} {spinner:.green} {wide_msg} [{elapsed_precise}]",
+    )
+    .unwrap()
+    .progress_chars("##-")
+}
+
+fn configure_logging(logging_opts: &LoggingOpts) {
+    let indicatif_layer = IndicatifLayer::new()
+        .with_span_field_formatter(hide_indicatif_span_fields(DefaultFields::new()))
+        .with_progress_style(default_progress_bar());
+
+    let layer = tracing_subscriber::fmt::layer()
+        .event_format(
+            Format::default()
+                .with_target(false)
+                .without_time()
+                .compact(),
+        )
+        .with_writer(indicatif_layer.get_stdout_writer())
+        .fmt_fields(PrettyFields::new())
+        .with_filter(logging_opts.to_level());
+
+    let subscriber = Registry::default().with(layer).with(indicatif_layer);
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 }
